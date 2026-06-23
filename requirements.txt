@@ -5,3 +5,7 @@ branca
 plotly
 pandas
 openpyxl
+google-generativeai
+gspread
+google-auth
+pillow
