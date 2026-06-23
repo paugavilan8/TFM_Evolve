@@ -1,0 +1,11 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.streamlit/secrets.toml
+*.parquet
+data/
+Registro_carreras_TFM.xlsx
+spanish_od_data/
+.DS_Store
+Thumbs.db

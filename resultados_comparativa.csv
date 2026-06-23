@@ -1,0 +1,6 @@
+,MAE,RMSE,WAPE_%
+Baseline,4.98,18.853,28.548
+LightGBM,2.873,9.565,16.47
+Baseline (muestra),31.214,52.701,25.201
+LightGBM (muestra),16.954,26.575,13.688
+Prophet (muestra),42.765,63.233,34.527
