@@ -59,29 +59,49 @@ Convierte las comas decimales a punto."""
 
 CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
-#MainMenu, footer {visibility: hidden;}
-.block-container {padding-top: 1.5rem; max-width: 1100px;}
-.brand {font-weight: 800; font-size: 1.5rem; letter-spacing: -.02em; margin-bottom: .2rem;}
-.brand b {color: #0E6E55;}
-.sub {color: #5e6b78; margin-bottom: 1rem;}
-.hero {color: #fff; border-radius: 20px; padding: 26px 30px; margin: 6px 0 18px;}
-.hero-label {opacity: .9; font-size: .8rem; text-transform: uppercase; letter-spacing: .1em;}
-.hero-stand {font-size: 2.3rem; font-weight: 800; line-height: 1.1; margin: .15em 0;}
-.hero-why {opacity: .92; margin-top: .5em; font-size: .98rem;}
-.badge {display: inline-block; padding: 5px 14px; border-radius: 999px;
-        font-weight: 600; font-size: .85rem; background: rgba(255,255,255,.22);}
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+html, body, [class*="css"], .stApp { font-family: 'Inter', sans-serif; }
+.stApp { background: #F4F5F7; }
+#MainMenu, footer, header, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+.block-container { padding-top: 1rem; padding-bottom: 3rem; max-width: 760px; }
+
+/* Cabecera de marca */
+.brandbar { display: flex; align-items: center; gap: 12px; margin: 2px 0 16px; }
+.brandbar .avatar { width: 42px; height: 42px; border-radius: 50%; background: #C0392B; color: #fff;
+  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; flex: none; }
+.brandbar .title { font-weight: 800; font-size: 1.25rem; color: #1A1A1A; line-height: 1.15; }
+.brandbar .title b { color: #C0392B; }
+.brandbar .sub { color: #7A828C; font-size: .85rem; }
+
+/* Tarjeta de recomendación */
+.hero { background: linear-gradient(135deg, #C0392B, #8E2018); color: #fff; border-radius: 20px;
+  padding: 22px 24px; margin: 6px 0 16px; box-shadow: 0 12px 26px rgba(192,57,43,.28); }
+.hero-label { opacity: .9; font-size: .74rem; text-transform: uppercase; letter-spacing: .09em; }
+.hero-stand { font-size: 2rem; font-weight: 800; line-height: 1.1; margin: .15em 0; }
+.hero-why { opacity: .92; margin-top: .5em; font-size: .95rem; }
+.badge { display: inline-block; padding: 5px 13px; border-radius: 999px;
+  font-weight: 600; font-size: .82rem; background: rgba(255,255,255,.22); }
+
+/* Métricas y contenedores como tarjetas blancas */
+[data-testid="stMetric"], [data-testid="stVerticalBlockBorderWrapper"] {
+  background: #fff; border: 1px solid #EDEFF2; border-radius: 16px; padding: 14px 16px;
+  box-shadow: 0 4px 16px rgba(20,32,43,.05); }
+[data-testid="stMetricValue"] { color: #C0392B; font-weight: 800; }
+
+/* Botones rojos redondeados */
+.stButton > button, .stDownloadButton > button, [data-testid="stCameraInput"] button {
+  background: #C0392B; color: #fff; border: none; border-radius: 12px; font-weight: 600; padding: .55rem 1rem; }
+.stButton > button:hover { background: #A93226; color: #fff; }
+
 @media (max-width: 640px) {
-  .block-container {padding: 1rem .7rem !important;}
-  .hero {padding: 22px 20px;}
-  .hero-stand {font-size: 1.85rem;}
-  .brand {font-size: 1.3rem;}
+  .block-container { padding: .8rem .7rem 3rem !important; }
+  .hero-stand { font-size: 1.7rem; }
 }
 </style>
 """
-CSS_NIGHT = "<style>.stApp{background:#0e1117;} h1,h2,h3,h4,p,span,div,label{color:#e6edf3 !important;}" \
-            ".sub{color:#9aa5b1 !important;}</style>"
+CSS_NIGHT = "<style>.stApp{background:#0e1117;} .brandbar .title,.brandbar .title b{color:#e6edf3;}" \
+            "[data-testid='stMetric'],[data-testid='stVerticalBlockBorderWrapper']{background:#161b22;border-color:#2b333d;}" \
+            "h1,h2,h3,h4,p,span,div,label{color:#e6edf3 !important;} .brandbar .sub{color:#9aa5b1 !important;}</style>"
 
 
 # ----------------------------- Carga -----------------------------
