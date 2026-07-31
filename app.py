@@ -63,7 +63,7 @@ CSS = """
 html, body, [class*="css"], .stApp { font-family: 'Inter', sans-serif; }
 .stApp { background: #F4F5F7; }
 #MainMenu, footer, header, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
-.block-container { padding-top: 1rem; padding-bottom: 3rem; max-width: 760px; }
+.block-container { padding-top: 1rem; padding-bottom: 6rem; max-width: 760px; }
 
 /* Cabecera de marca */
 .brandbar { display: flex; align-items: center; gap: 12px; margin: 2px 0 16px; }
@@ -92,6 +92,25 @@ html, body, [class*="css"], .stApp { font-family: 'Inter', sans-serif; }
 .stButton > button, .stDownloadButton > button, [data-testid="stCameraInput"] button {
   background: #C0392B; color: #fff; border: none; border-radius: 12px; font-weight: 600; padding: .55rem 1rem; }
 .stButton > button:hover { background: #A93226; color: #fff; }
+
+/* Barra de navegación inferior */
+.bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000; background: #fff;
+  border-top: 1px solid #EDEFF2; display: flex; height: 64px; box-shadow: 0 -4px 18px rgba(0,0,0,.05); }
+.bottomnav a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px; text-decoration: none; color: #8A929B; font-size: .72rem; font-weight: 600; }
+.bottomnav a.active { color: #C0392B; }
+.bottomnav svg { width: 22px; height: 22px; }
+.nightbtn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px;
+  border-radius: 50%; border: 1px solid #E4E7EB; color: #5e6b78; text-decoration: none; margin-top: 2px; }
+.nightbtn svg { width: 18px; height: 18px; }
+
+/* Ranking de paradas */
+.rank { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #EDEFF2;
+  border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; box-shadow: 0 3px 12px rgba(20,32,43,.04); }
+.rank .num { width: 26px; height: 26px; border-radius: 50%; background: #F3F4F6; color: #6b7280;
+  font-weight: 700; font-size: .8rem; display: flex; align-items: center; justify-content: center; flex: none; }
+.rank .nom { font-weight: 600; color: #1A1A1A; flex: 1; }
+.rank .lvl { font-size: .78rem; font-weight: 700; }
 
 @media (max-width: 640px) {
   .block-container { padding: .8rem .7rem 3rem !important; }
@@ -409,6 +428,13 @@ def modo_conductor(perfil, geo, nombres, paradas, noche):
             f'<div class="hero-why">Es la parada con más movimiento previsto a esta hora.</div>'
             f'</div>', unsafe_allow_html=True)
         dibujar_mapa_paradas(items, noche)
+        st.markdown("**Ranking de paradas**")
+        filas = ""
+        for i, it in enumerate(items[:8], 1):
+            filas += (f'<div class="rank"><div class="num">{i}</div>'
+                      f'<div class="nom">{it["nombre"]}</div>'
+                      f'<div class="lvl" style="color:{COLOR[it["nivel"]]}">{it["nivel"]}</div></div>')
+        st.markdown(filas, unsafe_allow_html=True)
     else:
         st.info("Aún no tengo las paradas (`paradas_terrassa.csv`) o el mapa (`terrassa_distritos.geojson`).")
 
@@ -497,30 +523,68 @@ def modo_analisis(perfil, nombres):
                 st.bar_chart(por_hora)
 
 
-# =============================== Página ===============================
+# =============================== Navegación y página ===============================
+ICONOS = {
+    "conductor": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                 'stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/>'
+                 '<circle cx="12" cy="10" r="2.5"/></svg>',
+    "registrar": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                 'stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/>'
+                 '<path d="M9 7h6M9 11h6"/></svg>',
+    "analisis": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+                'stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-8"/>'
+                '<path d="M2 20h20"/></svg>',
+}
+MOON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
+        'stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>')
+
+
+def _nav_url(modo=None, noche=None):
+    cur = st.query_params
+    m = modo if modo is not None else cur.get("modo", "conductor")
+    n = noche if noche is not None else cur.get("noche", "0")
+    return f"?modo={m}&noche={n}"
+
+
+def bottom_nav(activo):
+    labels = {"conductor": "Conductor", "registrar": "Registrar", "analisis": "Análisis"}
+    links = ""
+    for k in ("conductor", "registrar", "analisis"):
+        cls = "active" if k == activo else ""
+        links += (f'<a class="{cls}" target="_self" href="{_nav_url(modo=k)}">'
+                  f'{ICONOS[k]}<span>{labels[k]}</span></a>')
+    return f'<div class="bottomnav">{links}</div>'
+
+
 def main():
     perfil = cargar_perfil()
     geo, nombres = cargar_geo()
     paradas = cargar_paradas()
 
     st.markdown(CSS, unsafe_allow_html=True)
-    c1, c2 = st.columns([3, 1])
+    modo_key = st.query_params.get("modo", "conductor")
+    if modo_key not in ("conductor", "registrar", "analisis"):
+        modo_key = "conductor"
+    noche = st.query_params.get("noche", "0") == "1"
+    if noche:
+        st.markdown(CSS_NIGHT, unsafe_allow_html=True)
+
+    c1, c2 = st.columns([5, 1])
     c1.markdown('<div class="brandbar"><div class="avatar">T</div>'
                 '<div><div class="title">Taxi<b>Terrassa</b></div>'
                 '<div class="sub">Dónde hay trabajo, ahora mismo</div></div></div>',
                 unsafe_allow_html=True)
-    modo = c2.radio("Vista", ["Conductor", "Registrar", "Análisis"],
-                    label_visibility="collapsed")
-    noche = c2.toggle("Modo noche")
-    if noche:
-        st.markdown(CSS_NIGHT, unsafe_allow_html=True)
+    c2.markdown(f'<a class="nightbtn" target="_self" href="{_nav_url(noche="0" if noche else "1")}">{MOON}</a>',
+                unsafe_allow_html=True)
 
-    if modo == "Conductor":
+    if modo_key == "conductor":
         modo_conductor(perfil, geo, nombres, paradas, noche)
-    elif modo == "Registrar":
+    elif modo_key == "registrar":
         modo_registrar()
     else:
         modo_analisis(perfil, nombres)
+
+    st.markdown(bottom_nav(modo_key), unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
