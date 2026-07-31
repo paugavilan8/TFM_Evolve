@@ -9,3 +9,4 @@ google-generativeai
 gspread
 google-auth
 pillow
+holidays

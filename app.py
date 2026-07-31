@@ -313,17 +313,44 @@ def dibujar_mapa_paradas(items, noche):
     st_folium(m, height=460, use_container_width=True)
 
 
+# ----------------------------- Contexto: festivos y clima -----------------------------
+@st.cache_data
+def es_festivo(fecha):
+    try:
+        import holidays
+        return fecha in holidays.Spain(subdiv="CT", years=fecha.year)
+    except Exception:
+        return False
+
+
+@st.cache_data(ttl=1800)
+def clima_actual():
+    import urllib.request
+    url = ("https://api.open-meteo.com/v1/forecast?latitude=41.56&longitude=2.01"
+           "&current=temperature_2m,precipitation")
+    try:
+        with urllib.request.urlopen(url, timeout=8) as r:
+            c = json.loads(r.read())["current"]
+        return {"temp": c.get("temperature_2m"), "lluvia": c.get("precipitation") or 0}
+    except Exception:
+        return None
+
+
 # ----------------------------- Modos -----------------------------
 def modo_conductor(perfil, geo, nombres, paradas, noche):
     ahora = dt.datetime.now()
     cc1, cc2 = st.columns([1, 2])
     if cc1.toggle("Ahora mismo", value=True):
-        dia, hora = ahora.isoweekday(), ahora.hour
+        dia, hora, fecha = ahora.isoweekday(), ahora.hour, ahora.date()
     else:
         dia = cc1.selectbox("Día", list(DIAS), format_func=lambda d: DIAS[d], index=ahora.isoweekday() - 1)
         hora = cc2.slider("Hora", 0, 23, ahora.hour)
+        fecha = ahora.date()
 
-    dem = demanda_distritos(perfil, dia, hora)
+    festivo = es_festivo(fecha)
+    dia_efectivo = 7 if festivo else dia   # un festivo se comporta como un domingo
+
+    dem = demanda_distritos(perfil, dia_efectivo, hora)
     vmax = float(dem.max()) if len(dem) else 0.0
     items = []
     if paradas is not None and geo is not None:
@@ -334,7 +361,23 @@ def modo_conductor(perfil, geo, nombres, paradas, noche):
             v = float(dem.get(did, 0)) if did else 0.0
             items.append({"nombre": p["nombre"], "lat": float(p["lat"]), "lon": float(p["lon"]),
                           "valor": v, "nivel": nivel(v, vmax)})
-        items.sort(key=lambda d: d["valor"], reverse=True)
+
+    if items:
+        with st.expander("¿Hay algún evento hoy? (opcional)"):
+            ev = st.selectbox("Parada cercana al evento", ["(ninguno)"] + [it["nombre"] for it in items])
+            if ev != "(ninguno)":
+                for it in items:
+                    if it["nombre"] == ev:
+                        it["valor"] = vmax * 2 + 1
+                        it["nivel"] = "Alta"
+
+    items.sort(key=lambda d: d["valor"], reverse=True)
+
+    if festivo:
+        st.info("Hoy es festivo: uso el patrón de demanda de un domingo.")
+    clima = clima_actual()
+    if clima and clima.get("lluvia", 0) > 0:
+        st.info("Está lloviendo ahora mismo: suele haber más carreras.")
 
     if items:
         top = items[0]
