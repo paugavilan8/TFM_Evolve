@@ -402,7 +402,7 @@ def modo_conductor(perfil, geo, nombres, paradas, noche):
     if items:
         top = items[0]
         st.markdown(
-            f'<div class="hero" style="background:{COLOR[top["nivel"]]}">'
+            f'<div class="hero">'
             f'<div class="hero-label">Ahora ({DIAS[dia]}, {hora:02d}:00), ve a</div>'
             f'<div class="hero-stand">{top["nombre"]}</div>'
             f'<span class="badge">Demanda {top["nivel"].lower()}</span>'
@@ -505,8 +505,9 @@ def main():
 
     st.markdown(CSS, unsafe_allow_html=True)
     c1, c2 = st.columns([3, 1])
-    c1.markdown('<div class="brand">Taxi<b>Terrassa</b></div>'
-                '<div class="sub">Tu asistente para saber dónde hay trabajo</div>',
+    c1.markdown('<div class="brandbar"><div class="avatar">T</div>'
+                '<div><div class="title">Taxi<b>Terrassa</b></div>'
+                '<div class="sub">Dónde hay trabajo, ahora mismo</div></div></div>',
                 unsafe_allow_html=True)
     modo = c2.radio("Vista", ["Conductor", "Registrar", "Análisis"],
                     label_visibility="collapsed")
