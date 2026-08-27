@@ -1,10 +1,43 @@
+# .streamlit/config.toml
+# Sustituye por completo al anterior. La paleta ya no mezcla verde y rojo, y los
+# widgets nativos de Streamlit heredan el tema en lugar de pelearse con el CSS.
+
 [theme]
 base = "light"
-primaryColor = "#0E6E55"
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F2F5F7"
-textColor = "#15202B"
-font = "sans serif"
+primaryColor = "#C0392B"
+
+# Fuente web: sintaxis "'Nombre':url". Cambia a Outfit o Figtree si prefieres.
+font = "'Plus Jakarta Sans':https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+headingFont = "'Plus Jakarta Sans':https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
+
+baseFontSize = 15
+headingFontWeights = [800, 800, 700, 700, 600, 600]
+baseRadius = "1rem"
+buttonRadius = "0.75rem"
+showWidgetBorder = true
+linkUnderline = false
+
+# La demanda alta es roja, la media ámbar, la baja gris. Estos tres colores son los
+# mismos que usa COLOR en app.py, así que los gráficos y los widgets coinciden.
+redColor = "#C0392B"
+orangeColor = "#E0902E"
+grayColor = "#9AA5B1"
+chartCategoricalColors = ["#C0392B", "#E0902E", "#9AA5B1", "#8E2018", "#D98B7F"]
+
+[theme.light]
+backgroundColor = "#F4F5F7"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1A1A1A"
+borderColor = "#EAEDF1"
+
+[theme.dark]
+backgroundColor = "#0E1117"
+secondaryBackgroundColor = "#161B22"
+textColor = "#E6EDF3"
+borderColor = "#2B333D"
 
 [client]
-toolbarMode = "minimal"
+# "viewer" en lugar de "minimal": deja accesible el menú de Ajustes, que es donde
+# el usuario cambia entre claro y oscuro. Antes el CSS ocultaba la barra entera y
+# el modo noche tenía que estar hecho a mano con !important.
+toolbarMode = "viewer"

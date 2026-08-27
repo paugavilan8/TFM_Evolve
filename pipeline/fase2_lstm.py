@@ -10,8 +10,8 @@ zona, mira las últimas WINDOW horas de esa zona. Por coste de cómputo se entre
 sobre una MUESTRA de zonas (las de más demanda), igual que hicimos con Prophet, y
 LightGBM se reentrena sobre esas mismas zonas para que la comparación sea justa.
 
-Entrada:  data/processed/demanda_features_2023.parquet
-Salida:   resultados_lstm.csv
+Entrada:  data/gold/demanda_features_2023.parquet
+Salida:   results/resultados_lstm.csv
 
 Ejecuta en TU máquina, con el venv activado:
     python -m pip install tensorflow lightgbm pandas pyarrow numpy
@@ -21,12 +21,18 @@ Ejecuta en TU máquina, con el venv activado:
 """
 
 import os
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 
-IN_PATH = "data/processed/demanda_features_2023.parquet"
+# Raíz del proyecto (este script vive en pipeline/), para que las rutas de datos
+# no dependan del directorio desde el que lo lances.
+ROOT = Path(__file__).resolve().parents[1]
+IN_PATH = ROOT / "data" / "gold" / "demanda_features_2023.parquet"
+RESULTS_DIR = ROOT / "results"
 TARGET = "demanda"
 WINDOW = 168          # nº de horas de historia que mira el LSTM (168 = 1 semana; capta el lag semanal)
 SAMPLE_ZONES = 20     # zonas de más demanda para entrenar (sube/baja según tu RAM)
@@ -125,7 +131,7 @@ print("\n" + "=" * 56)
 print(f"COMPARATIVA — muestra de {SAMPLE_ZONES} zonas (test nov-dic)")
 print("=" * 56)
 print(tabla.to_string())
-tabla.to_csv("resultados_lstm.csv")
+tabla.to_csv(RESULTS_DIR / "resultados_lstm.csv")
 print("\n→ Guardado: resultados_lstm.csv")
 
 mejor = tabla["WAPE_%"].idxmin()

@@ -2,8 +2,8 @@
 Añade coordenadas (lat, lon) a paradas_terrassa.csv geolocalizando las direcciones
 con Nominatim (OpenStreetMap). TFM Pau Gavilán.
 
-Ejecuta una vez en TU máquina (necesita internet):
-    python geocodificar_paradas.py
+Ejecuta una vez en TU máquina (necesita internet), desde la raíz del proyecto:
+    python scripts/geocodificar_paradas.py
 
 Respeta el límite de Nominatim (1 consulta/segundo). Si alguna dirección no se
 encuentra, la deja sin coordenadas y te avisa para que la ajustes a mano.
@@ -14,8 +14,10 @@ import json
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
-ARCHIVO = "paradas_terrassa.csv"
+# Este script vive en scripts/; el CSV está en data/external/ de la raíz del proyecto.
+ARCHIVO = Path(__file__).resolve().parents[1] / "data" / "external" / "paradas_terrassa.csv"
 URL = "https://nominatim.openstreetmap.org/search"
 HEADERS = {"User-Agent": "TFM-taxi-pau/1.0 (uso academico)"}
 

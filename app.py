@@ -2,21 +2,25 @@
 TaxiTerrassa — App unificada (Fase 4)
 TFM Pau Gavilán
 
-Tres modos:
-  Conductor  — recomienda la parada a la que ir (mapa, demanda por niveles).
+Tres vistas, navegación inferior tipo app:
+  Conductor  — recomienda la parada a la que ir (mapa, ranking, niveles de demanda).
   Registrar  — foto del ticket -> Gemini extrae -> guarda en Google Sheets (o Excel local).
-  Análisis   — patrones, transferencia NYC<->Terrassa y rentabilidad REAL leída del registro.
+  Análisis   — patrón de demanda por día, transferencia NYC<->Terrassa y rentabilidad real.
 
-Coloca junto a este archivo: perfil_movilidad_terrassa.csv, terrassa_distritos.geojson,
-paradas_terrassa.csv, (opcional) data/processed/demanda_nyc_2023.parquet, .streamlit/config.toml
-y, para el escáner/rentabilidad en la nube, los secretos (GEMINI_API_KEY, SHEET_ID, cuenta de servicio).
+Datos que consume (rutas relativas a la raíz del proyecto):
+  data/external/  perfil_movilidad_terrassa.csv, terrassa_distritos.geojson, paradas_terrassa.csv
+  data/registro/  Registro_carreras_TFM.xlsx  (si no hay Google Sheets configurado)
+  data/processed/ demanda_nyc_2023.parquet    (opcional: bloque de transferencia NYC)
+Configuración: .streamlit/config.toml y, para escáner/rentabilidad en la nube, los
+secretos (GEMINI_API_KEY, SHEET_ID, cuenta de servicio).
 
     python -m pip install streamlit folium streamlit-folium branca plotly pandas openpyxl \
-                          google-generativeai gspread google-auth pillow
+                          google-generativeai gspread google-auth pillow holidays
     python -m streamlit run app.py
 """
 
 import datetime as dt
+import html as _html
 import io
 import json
 import os
@@ -29,14 +33,32 @@ import streamlit as st
 st.set_page_config(page_title="TaxiTerrassa", page_icon="🚕",
                    layout="centered", initial_sidebar_state="collapsed")
 
-PERFIL_CSV = "perfil_movilidad_terrassa.csv"
-GEOJSON = "terrassa_distritos.geojson"
-PARADAS_CSV = "paradas_terrassa.csv"
-REGISTRO_XLSX = "Registro_carreras_TFM.xlsx"
-NYC_PARQUET = "data/processed/demanda_nyc_2023.parquet"
+# =============================== Constantes ===============================
+# La app vive en la raíz (entrypoint de Streamlit Cloud). Las rutas se anclan al
+# fichero para que no dependan del directorio desde el que se lance.
+DATA_DIR = Path(__file__).resolve().parent / "data"
+PERFIL_CSV = DATA_DIR / "external" / "perfil_movilidad_terrassa.csv"
+GEOJSON = DATA_DIR / "external" / "terrassa_distritos.geojson"
+PARADAS_CSV = DATA_DIR / "external" / "paradas_terrassa.csv"
+REGISTRO_XLSX = DATA_DIR / "registro" / "Registro_carreras_TFM.xlsx"
+NYC_PARQUET = DATA_DIR / "processed" / "demanda_nyc_2023.parquet"
 CENTRO = [41.5631, 2.0089]
 DIAS = {1: "Lunes", 2: "Martes", 3: "Miércoles", 4: "Jueves", 5: "Viernes", 6: "Sábado", 7: "Domingo"}
-COLOR = {"Alta": "#0E6E55", "Media": "#E6A700", "Baja": "#9AA5B1"}
+DIAS_CORTO = {1: "Lun", 2: "Mar", 3: "Mié", 4: "Jue", 5: "Vie", 6: "Sáb", 7: "Dom"}
+VISTAS = ["Conductor", "Registrar", "Análisis"]
+
+# Paleta única: rojo de marca + ámbar + gris. La demanda alta es ROJA (antes era verde,
+# lo que contradecía el resto de la interfaz).
+ROJO = "#C0392B"
+ROJO_OSCURO = "#8E2018"
+COLOR = {"Alta": "#C0392B", "Media": "#E0902E", "Baja": "#9AA5B1"}
+
+# El geojson trae nombres genéricos ("Terrassa distrito 01"). Rellena esto con los
+# barrios reales y aparecerán en el chip del hero y en el mapa de calor.
+ALIAS_DISTRITO = {
+    # "Terrassa distrito 01": "Centre",
+    # "Terrassa distrito 02": "Ca n'Aurell",
+}
 
 MODELO = "gemini-2.5-flash"
 COLUMNAS = ["fecha", "hora_recogida", "hora_fin", "zona_recogida", "zona_destino",
@@ -57,73 +79,174 @@ Pistas: fecha=DATA INICI, hora_recogida=HORA INICI, hora_fin=HORA FINAL,
 distancia=RECORREGUT (km), importe=IMP. TOTAL (total cobrado).
 Convierte las comas decimales a punto."""
 
-CSS = """
-<style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-html, body, [class*="css"], .stApp { font-family: 'Inter', sans-serif; }
-.stApp { background: #F4F5F7; }
-#MainMenu, footer, header, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
-.block-container { padding-top: 1rem; padding-bottom: 6rem; max-width: 760px; }
+# =============================== Tema y estilos ===============================
+# Los widgets nativos de Streamlit siguen [theme] / [theme.dark] de config.toml.
+# Aquí sólo definimos los tokens de las tarjetas propias, alineados con ese tema.
+TOKENS = {
+    "light": {"bg": "#F4F5F7", "surface": "#FFFFFF", "ink": "#1A1A1A", "muted": "#7A828C",
+              "line": "#EAEDF1", "shadow": "rgba(20,32,43,.07)", "wash": "#FCEDEB"},
+    "dark": {"bg": "#0E1117", "surface": "#161B22", "ink": "#E6EDF3", "muted": "#9AA5B1",
+             "line": "#2B333D", "shadow": "rgba(0,0,0,.45)", "wash": "#25181A"},
+}
+ESCALA = {
+    "light": [[0.0, "#FDF0EE"], [0.35, "#F0B4A8"], [0.7, "#D2604F"], [1.0, "#8E2018"]],
+    "dark": [[0.0, "#1E1517"], [0.35, "#6B2A22"], [0.7, "#B14434"], [1.0, "#E4715C"]],
+}
 
-/* Cabecera de marca */
-.brandbar { display: flex; align-items: center; gap: 12px; margin: 2px 0 16px; }
-.brandbar .avatar { width: 42px; height: 42px; border-radius: 50%; background: #C0392B; color: #fff;
-  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; flex: none; }
-.brandbar .title { font-weight: 800; font-size: 1.25rem; color: #1A1A1A; line-height: 1.15; }
-.brandbar .title b { color: #C0392B; }
-.brandbar .sub { color: #7A828C; font-size: .85rem; }
+ICONO = {
+    "bolt": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>',
+    "clock": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/></svg>',
+    "trend": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg>',
+    "pin": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s7-6.2 7-11a7 7 0 1 0-14 0c0 4.8 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/></svg>',
+    "route": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="5.5" r="2.5"/><path d="M8 18.5h6a3.5 3.5 0 0 0 0-7H10a3.5 3.5 0 0 1 0-7h6"/></svg>',
+    "euro": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 6.5A6.5 6.5 0 1 0 17 17.5"/><path d="M4 10.5h9M4 14h9"/></svg>',
+    "gauge": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 18a8 8 0 1 1 16 0"/><path d="M12 18l4.5-5"/></svg>',
+    "receipt": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12v18l-3-2-3 2-3-2-3 2z"/><path d="M9.5 8h5M9.5 12h5"/></svg>',
+    "chart": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 20V11M12 20V5M19 20v-6"/></svg>',
+    "grid": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>',
+}
 
-/* Tarjeta de recomendación */
-.hero { background: linear-gradient(135deg, #C0392B, #8E2018); color: #fff; border-radius: 20px;
-  padding: 22px 24px; margin: 6px 0 16px; box-shadow: 0 12px 26px rgba(192,57,43,.28); }
-.hero-label { opacity: .9; font-size: .74rem; text-transform: uppercase; letter-spacing: .09em; }
-.hero-stand { font-size: 2rem; font-weight: 800; line-height: 1.1; margin: .15em 0; }
-.hero-why { opacity: .92; margin-top: .5em; font-size: .95rem; }
-.badge { display: inline-block; padding: 5px 13px; border-radius: 999px;
-  font-weight: 600; font-size: .82rem; background: rgba(255,255,255,.22); }
+CSS_BASE = """
+.stApp { background: var(--tt-bg); }
+footer, [data-testid="stDecoration"], [data-testid="stStatusWidget"] { display: none !important; }
+.block-container { padding: 1rem .9rem 7rem !important; max-width: 780px; }
+h1, h2, h3 { letter-spacing: -.02em; }
 
-/* Métricas y contenedores como tarjetas blancas */
-[data-testid="stMetric"], [data-testid="stVerticalBlockBorderWrapper"] {
-  background: #fff; border: 1px solid #EDEFF2; border-radius: 16px; padding: 14px 16px;
-  box-shadow: 0 4px 16px rgba(20,32,43,.05); }
-[data-testid="stMetricValue"] { color: #C0392B; font-weight: 800; }
+/* ---------- Cabecera de marca ---------- */
+.tt-brand { display: flex; align-items: center; gap: 12px; padding: 2px 0 14px;
+  border-bottom: 1px solid var(--tt-line); margin-bottom: 18px; }
+.tt-brand .av { width: 44px; height: 44px; border-radius: 50%; flex: none; color: #fff;
+  background: linear-gradient(145deg, #D4483A, #8E2018); display: flex; align-items: center;
+  justify-content: center; font-weight: 800; font-size: 20px; }
+.tt-brand .nm { font-weight: 800; font-size: 1.22rem; color: var(--tt-ink); line-height: 1.1; }
+.tt-brand .nm b { color: var(--tt-red); }
+.tt-brand .sb { color: var(--tt-muted); font-size: .84rem; }
 
-/* Botones rojos redondeados */
-.stButton > button, .stDownloadButton > button, [data-testid="stCameraInput"] button {
-  background: #C0392B; color: #fff; border: none; border-radius: 12px; font-weight: 600; padding: .55rem 1rem; }
-.stButton > button:hover { background: #A93226; color: #fff; }
+/* ---------- Tarjeta genérica ---------- */
+.tt-card { background: var(--tt-surface); border: 1px solid var(--tt-line); border-radius: 18px;
+  padding: 18px 20px; box-shadow: 0 6px 18px var(--tt-shadow); margin-bottom: 14px; }
+.tt-h { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 1.06rem;
+  color: var(--tt-ink); margin: 22px 0 12px; letter-spacing: -.01em; }
+.tt-h svg { width: 19px; height: 19px; color: var(--tt-red); flex: none; }
+.tt-sub { color: var(--tt-muted); font-size: .9rem; margin: -6px 0 16px; }
 
-/* Barra de navegación inferior */
-.bottomnav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 1000; background: #fff;
-  border-top: 1px solid #EDEFF2; display: flex; height: 64px; box-shadow: 0 -4px 18px rgba(0,0,0,.05); }
-.bottomnav a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 4px; text-decoration: none; color: #8A929B; font-size: .72rem; font-weight: 600; }
-.bottomnav a.active { color: #C0392B; }
-.bottomnav svg { width: 22px; height: 22px; }
-.nightbtn { display: flex; align-items: center; justify-content: center; width: 40px; height: 40px;
-  border-radius: 50%; border: 1px solid #E4E7EB; color: #5e6b78; text-decoration: none; margin-top: 2px; }
-.nightbtn svg { width: 18px; height: 18px; }
+/* ---------- Hero de recomendación ---------- */
+.tt-hero { background: linear-gradient(135deg, #C0392B 0%, #A32A1E 55%, #7E1B14 100%);
+  color: #fff; border-radius: 22px; padding: 22px 24px 24px; margin: 4px 0 16px;
+  box-shadow: 0 16px 34px rgba(142,32,24,.32); }
+.tt-eyebrow { display: flex; align-items: center; gap: 8px; font-size: .72rem; font-weight: 700;
+  text-transform: uppercase; letter-spacing: .1em; opacity: .93; }
+.tt-eyebrow svg { width: 15px; height: 15px; }
+.tt-title { font-size: 2.15rem; font-weight: 800; line-height: 1.05; margin: .28em 0 .5em;
+  letter-spacing: -.03em; }
+.tt-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.tt-chip { padding: 5px 13px; border-radius: 999px; font-size: .8rem; font-weight: 600;
+  background: rgba(255,255,255,.2); }
+.tt-why { opacity: .92; font-size: .93rem; margin: 14px 0 0; }
 
-/* Ranking de paradas */
-.rank { display: flex; align-items: center; gap: 12px; background: #fff; border: 1px solid #EDEFF2;
-  border-radius: 14px; padding: 12px 14px; margin-bottom: 8px; box-shadow: 0 3px 12px rgba(20,32,43,.04); }
-.rank .num { width: 26px; height: 26px; border-radius: 50%; background: #F3F4F6; color: #6b7280;
-  font-weight: 700; font-size: .8rem; display: flex; align-items: center; justify-content: center; flex: none; }
-.rank .nom { font-weight: 600; color: #1A1A1A; flex: 1; }
-.rank .lvl { font-size: .78rem; font-weight: 700; }
+/* ---------- Ranking de paradas ---------- */
+.tt-rank { display: flex; align-items: center; gap: 14px; padding: 13px 16px;
+  background: var(--tt-surface); border: 1px solid var(--tt-line); border-radius: 16px;
+  margin-bottom: 9px; box-shadow: 0 3px 10px var(--tt-shadow); }
+.tt-rank .n { width: 30px; height: 30px; border-radius: 50%; flex: none; display: flex;
+  align-items: center; justify-content: center; background: var(--tt-wash);
+  color: var(--tt-red); font-weight: 700; font-size: .84rem; }
+.tt-rank .bd { flex: 1; min-width: 0; }
+.tt-rank .nombre { display: flex; align-items: center; gap: 6px; font-weight: 600;
+  font-size: .95rem; color: var(--tt-ink); margin-bottom: 7px; }
+.tt-rank .nombre svg { width: 15px; height: 15px; color: var(--tt-muted); flex: none; }
+.tt-rank .nombre span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tt-bar { height: 6px; border-radius: 999px; background: var(--tt-wash); overflow: hidden; }
+.tt-bar i { display: block; height: 100%; border-radius: 999px; }
+.tt-rank .lvl { font-size: .8rem; font-weight: 700; flex: none; }
+
+/* ---------- Tarjetas de métrica ---------- */
+.tt-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 6px; }
+.tt-stat { background: var(--tt-surface); border: 1px solid var(--tt-line); border-radius: 18px;
+  padding: 15px 16px; box-shadow: 0 5px 14px var(--tt-shadow); }
+.tt-stat svg { width: 20px; height: 20px; color: var(--tt-red); }
+.tt-stat .v { font-size: 1.55rem; font-weight: 800; color: var(--tt-ink); letter-spacing: -.03em;
+  margin: 8px 0 1px; }
+.tt-stat .l { font-size: .8rem; color: var(--tt-muted); }
+
+/* ---------- Pasos numerados ---------- */
+.tt-step { display: flex; gap: 15px; align-items: flex-start; background: var(--tt-surface);
+  border: 1px solid var(--tt-line); border-radius: 16px; padding: 14px 17px; margin-bottom: 9px;
+  box-shadow: 0 3px 10px var(--tt-shadow); }
+.tt-step .n { width: 30px; height: 30px; border-radius: 50%; flex: none; display: flex;
+  align-items: center; justify-content: center; background: var(--tt-wash);
+  color: var(--tt-red); font-weight: 700; font-size: .86rem; }
+.tt-step .t { font-weight: 700; color: var(--tt-ink); font-size: .96rem; }
+.tt-step .d { color: var(--tt-muted); font-size: .86rem; margin-top: 2px; }
+
+/* ---------- Leyenda del mapa ---------- */
+.tt-leg { display: flex; gap: 16px; justify-content: center; margin: 10px 0 4px;
+  font-size: .82rem; color: var(--tt-muted); }
+.tt-leg span { display: inline-flex; align-items: center; gap: 6px; }
+.tt-leg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+/* ---------- "Ahora mismo" como tarjeta ---------- */
+.st-key-tt_ahora { background: var(--tt-surface); border: 1px solid var(--tt-line);
+  border-radius: 16px; padding: 6px 16px; box-shadow: 0 4px 12px var(--tt-shadow); }
+.tt-inline { display: flex; align-items: center; gap: 9px; font-weight: 600;
+  color: var(--tt-ink); font-size: .96rem; }
+.tt-inline svg { width: 18px; height: 18px; color: var(--tt-red); }
+
+/* ---------- Navegación inferior ---------- */
+.st-key-tt_nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 998;
+  background: var(--tt-surface); border-top: 1px solid var(--tt-line);
+  padding: .55rem 1rem calc(.55rem + env(safe-area-inset-bottom));
+  box-shadow: 0 -6px 22px var(--tt-shadow); }
+.st-key-tt_nav > div { max-width: 780px; margin: 0 auto; }
+.st-key-tt_nav [data-baseweb="button-group"] { width: 100%; gap: 4px; }
+.st-key-tt_nav [data-baseweb="button-group"] button { flex: 1 1 0; border: none !important;
+  background: transparent !important; font-weight: 600; }
+.st-key-tt_nav [data-baseweb="button-group"] button[aria-checked="true"],
+.st-key-tt_nav [data-baseweb="button-group"] button[aria-pressed="true"] {
+  background: var(--tt-wash) !important; color: var(--tt-red) !important; }
+
+/* ---------- Retoques a widgets nativos ---------- */
+[data-testid="stVerticalBlockBorderWrapper"] { border-radius: 18px; }
+iframe[title="streamlit_folium.st_folium"] { border-radius: 18px; }
+.stButton > button, .stDownloadButton > button { border-radius: 12px; font-weight: 600; }
+[data-testid="stExpander"] details { border-radius: 14px; border-color: var(--tt-line); }
 
 @media (max-width: 640px) {
-  .block-container { padding: .8rem .7rem 3rem !important; }
-  .hero-stand { font-size: 1.7rem; }
+  .block-container { padding: .8rem .7rem 7rem !important; }
+  .tt-title { font-size: 1.78rem; }
+  .tt-stats { gap: 7px; }
+  .tt-stat { padding: 12px 12px; }
+  .tt-stat .v { font-size: 1.28rem; }
 }
-</style>
 """
-CSS_NIGHT = "<style>.stApp{background:#0e1117;} .brandbar .title,.brandbar .title b{color:#e6edf3;}" \
-            "[data-testid='stMetric'],[data-testid='stVerticalBlockBorderWrapper']{background:#161b22;border-color:#2b333d;}" \
-            "h1,h2,h3,h4,p,span,div,label{color:#e6edf3 !important;} .brandbar .sub{color:#9aa5b1 !important;}</style>"
 
 
-# ----------------------------- Carga -----------------------------
+def tema_oscuro() -> bool:
+    """Tema activo elegido por el usuario; si no se puede leer, cae al base de config.toml."""
+    try:
+        t = getattr(st, "context", None)
+        tipo = getattr(getattr(t, "theme", None), "type", None)
+        if tipo:
+            return str(tipo).lower() == "dark"
+    except Exception:
+        pass
+    try:
+        return str(st.get_option("theme.base") or "light").lower() == "dark"
+    except Exception:
+        return False
+
+
+def inyectar_css(oscuro: bool):
+    t = TOKENS["dark" if oscuro else "light"]
+    variables = "".join(f"--tt-{k}:{v};" for k, v in t.items()) + f"--tt-red:{ROJO};"
+    st.markdown(f"<style>.stApp{{{variables}}}{CSS_BASE}</style>", unsafe_allow_html=True)
+
+
+def esc(x) -> str:
+    return _html.escape(str(x))
+
+
+# =============================== Carga (sin cambios) ===============================
 @st.cache_data
 def cargar_perfil():
     df = pd.read_csv(PERFIL_CSV)
@@ -133,7 +256,7 @@ def cargar_perfil():
 
 @st.cache_data
 def cargar_geo():
-    p = Path(GEOJSON)
+    p = GEOJSON
     if not p.exists():
         return None, {}
     geo = json.loads(p.read_text(encoding="utf-8"))
@@ -147,7 +270,7 @@ def cargar_geo():
 
 @st.cache_data
 def cargar_paradas():
-    p = Path(PARADAS_CSV)
+    p = PARADAS_CSV
     if not p.exists():
         return None
     df = pd.read_csv(p)
@@ -157,7 +280,7 @@ def cargar_paradas():
     return df if len(df) else None
 
 
-# ----------------------------- Gemini / Sheets -----------------------------
+# =============================== Gemini / Sheets (sin cambios) ===============================
 def obtener_api_key():
     try:
         if "GEMINI_API_KEY" in st.secrets:
@@ -243,7 +366,7 @@ def guardar(df):
 
 def _guardar_excel(df):
     from openpyxl import load_workbook
-    if not Path(REGISTRO_XLSX).exists():
+    if not REGISTRO_XLSX.exists():
         raise FileNotFoundError(f"No encuentro '{REGISTRO_XLSX}'.")
     wb = load_workbook(REGISTRO_XLSX)
     ws = wb["Registro"]
@@ -275,7 +398,7 @@ def leer_registro():
             return df if len(df) else None
         except Exception:
             return None
-    p = Path(REGISTRO_XLSX)
+    p = REGISTRO_XLSX
     if not p.exists():
         return None
     try:
@@ -290,7 +413,7 @@ def leer_registro():
         return None
 
 
-# ----------------------------- Geometría / demanda -----------------------------
+# =============================== Geometría / demanda (sin cambios) ===============================
 def _en_anillo(x, y, anillo):
     dentro = False
     n = len(anillo)
@@ -329,30 +452,6 @@ def nivel(v, vmax):
     return "Baja"
 
 
-def dibujar_mapa_paradas(items, noche):
-    try:
-        import folium
-        from streamlit_folium import st_folium
-    except Exception:
-        st.warning("Instala el mapa: python -m pip install folium streamlit-folium")
-        return
-    tiles = "cartodbdark_matter" if noche else "cartodbpositron"
-    m = folium.Map(location=CENTRO, zoom_start=14, tiles=tiles)
-    for i, it in enumerate(items):
-        if pd.isna(it["lat"]) or pd.isna(it["lon"]):
-            continue
-        es_top = (i == 0)
-        folium.CircleMarker(
-            location=[it["lat"], it["lon"]],
-            radius=12 if es_top else 7,
-            color="#ffffff", weight=2 if es_top else 1,
-            fill=True, fill_color=COLOR[it["nivel"]], fill_opacity=0.95,
-            tooltip=f'{it["nombre"]} — demanda {it["nivel"].lower()}',
-        ).add_to(m)
-    st_folium(m, height=460, use_container_width=True)
-
-
-# ----------------------------- Contexto: festivos y clima -----------------------------
 @st.cache_data
 def es_festivo(fecha):
     try:
@@ -375,15 +474,133 @@ def clima_actual():
         return None
 
 
-# ----------------------------- Modos -----------------------------
-def modo_conductor(perfil, geo, nombres, paradas, noche):
+# =============================== Piezas de interfaz ===============================
+def encabezado(icono: str, texto: str):
+    st.markdown(f'<div class="tt-h">{ICONO[icono]}<span>{esc(texto)}</span></div>',
+                unsafe_allow_html=True)
+
+
+def hero(top, dia, hora, distrito, indice):
+    chips = [f"Demanda {top['nivel'].lower()}"]
+    if distrito:
+        chips.append(distrito)
+    chips.append(f"Índice {indice}")
+    chips_html = "".join(f'<span class="tt-chip">{esc(c)}</span>' for c in chips)
+    st.markdown(
+        f'<div class="tt-hero">'
+        f'<div class="tt-eyebrow">{ICONO["bolt"]}'
+        f'<span>{esc(DIAS[dia].upper())} · {hora:02d}:00 — VE A</span></div>'
+        f'<div class="tt-title">{esc(top["nombre"])}</div>'
+        f'<div class="tt-chips">{chips_html}</div>'
+        f'<p class="tt-why">Es la parada con más movimiento previsto a esta hora.</p>'
+        f'</div>', unsafe_allow_html=True)
+
+
+def ranking(items, n=6):
+    """Las barras se estiran sobre el rango visible (no sobre 0) porque la demanda
+    entre distritos de Terrassa varía poco y, en absoluto, todas quedarían al 90-100%."""
+    vis = items[:n]
+    if not vis:
+        return
+    vals = [i["valor"] for i in vis]
+    lo, hi = min(vals), max(vals)
+    span = (hi - lo) or 1.0
+    filas = []
+    for k, it in enumerate(vis, 1):
+        pct = 100 if hi == lo else 20 + round(80 * (it["valor"] - lo) / span)
+        c = COLOR[it["nivel"]]
+        filas.append(
+            f'<div class="tt-rank"><div class="n">{k}</div><div class="bd">'
+            f'<div class="nombre">{ICONO["pin"]}<span>{esc(it["nombre"])}</span></div>'
+            f'<div class="tt-bar"><i style="width:{pct}%;background:{c}"></i></div>'
+            f'</div><div class="lvl" style="color:{c}">{esc(it["nivel"])}</div></div>')
+    st.markdown("".join(filas), unsafe_allow_html=True)
+
+
+def tarjetas_metrica(trios):
+    """trios: lista de (clave_icono, valor, etiqueta)."""
+    celdas = "".join(
+        f'<div class="tt-stat">{ICONO[ic]}<div class="v">{esc(v)}</div>'
+        f'<div class="l">{esc(l)}</div></div>' for ic, v, l in trios)
+    st.markdown(f'<div class="tt-stats">{celdas}</div>', unsafe_allow_html=True)
+
+
+def pasos(lista):
+    html = "".join(
+        f'<div class="tt-step"><div class="n">{i}</div><div><div class="t">{esc(t)}</div>'
+        f'<div class="d">{esc(d)}</div></div></div>'
+        for i, (t, d) in enumerate(lista, 1))
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def leyenda(niveles=None):
+    presentes = [k for k in COLOR if niveles is None or k in niveles]
+    partes = "".join(f'<span><i style="background:{COLOR[k]}"></i>{k}</span>' for k in presentes)
+    st.markdown(f'<div class="tt-leg">{partes}</div>', unsafe_allow_html=True)
+
+
+def estilo_grafico(fig, oscuro, sufijo_x=None, alto=280):
+    t = TOKENS["dark" if oscuro else "light"]
+    fig.update_layout(
+        height=alto, paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family="Inter, 'Segoe UI', sans-serif", size=12, color=t["muted"]),
+        margin=dict(l=6, r=6, t=6, b=6), showlegend=False,
+        hoverlabel=dict(bgcolor=t["surface"], bordercolor=t["line"],
+                        font=dict(color=t["ink"], size=12)),
+    )
+    fig.update_xaxes(showgrid=False, zeroline=False, showline=True, linecolor=t["line"],
+                     ticksuffix=sufijo_x or "", title_text=None)
+    fig.update_yaxes(gridcolor=t["line"], zeroline=False, showline=False, title_text=None)
+    return fig
+
+
+def dibujar_mapa_paradas(items, oscuro):
+    try:
+        import folium
+        from streamlit_folium import st_folium
+    except Exception:
+        st.warning("Instala el mapa: python -m pip install folium streamlit-folium")
+        return
+    tiles = "cartodbdark_matter" if oscuro else "cartodbpositron"
+    m = folium.Map(location=CENTRO, zoom_start=14, tiles=tiles, zoom_control=False)
+    for i, it in enumerate(items):
+        if pd.isna(it["lat"]) or pd.isna(it["lon"]):
+            continue
+        es_top = (i == 0)
+        c = COLOR[it["nivel"]]
+        if es_top:
+            folium.CircleMarker(location=[it["lat"], it["lon"]], radius=20, color=c,
+                                weight=2, fill=True, fill_color=c, fill_opacity=0.18,
+                                opacity=0.5).add_to(m)
+        folium.CircleMarker(
+            location=[it["lat"], it["lon"]],
+            radius=13 if es_top else 7,
+            color="#ffffff", weight=2.5 if es_top else 1.5,
+            fill=True, fill_color=c, fill_opacity=0.98,
+            tooltip=f'{it["nombre"]} — demanda {it["nivel"].lower()}',
+        ).add_to(m)
+    st_folium(m, height=390, use_container_width=True, returned_objects=[])
+    leyenda({it["nivel"] for it in items})
+
+
+# =============================== Vistas ===============================
+def vista_conductor(perfil, geo, nombres, paradas, oscuro):
     ahora = dt.datetime.now()
-    cc1, cc2 = st.columns([1, 2])
-    if cc1.toggle("Ahora mismo", value=True):
+
+    with st.container(key="tt_ahora"):
+        c1, c2 = st.columns([4, 1], vertical_alignment="center")
+        c1.markdown(f'<div class="tt-inline">{ICONO["clock"]}<span>Ahora mismo</span></div>',
+                    unsafe_allow_html=True)
+        en_vivo = c2.toggle("Ahora mismo", value=True, label_visibility="collapsed",
+                            key="tt_vivo")
+
+    if en_vivo:
         dia, hora, fecha = ahora.isoweekday(), ahora.hour, ahora.date()
     else:
-        dia = cc1.selectbox("Día", list(DIAS), format_func=lambda d: DIAS[d], index=ahora.isoweekday() - 1)
-        hora = cc2.slider("Hora", 0, 23, ahora.hour)
+        d1, d2 = st.columns([1, 2])
+        dia = d1.selectbox("Día", list(DIAS), format_func=lambda d: DIAS[d],
+                           index=ahora.isoweekday() - 1)
+        hora = d2.slider("Hora", 0, 23, ahora.hour)
         fecha = ahora.date()
 
     festivo = es_festivo(fecha)
@@ -391,6 +608,7 @@ def modo_conductor(perfil, geo, nombres, paradas, noche):
 
     dem = demanda_distritos(perfil, dia_efectivo, hora)
     vmax = float(dem.max()) if len(dem) else 0.0
+
     items = []
     if paradas is not None and geo is not None:
         for _, p in paradas.iterrows():
@@ -398,19 +616,34 @@ def modo_conductor(perfil, geo, nombres, paradas, noche):
                 continue
             did = distrito_de(p["lon"], p["lat"], geo)
             v = float(dem.get(did, 0)) if did else 0.0
+            nom_d = nombres.get(did, "")
             items.append({"nombre": p["nombre"], "lat": float(p["lat"]), "lon": float(p["lon"]),
-                          "valor": v, "nivel": nivel(v, vmax)})
+                          "valor": v, "nivel": nivel(v, vmax),
+                          "distrito": ALIAS_DISTRITO.get(nom_d, nom_d),
+                          "plazas": float(p.get("plazas") or 0)})
 
     if items:
         with st.expander("¿Hay algún evento hoy? (opcional)"):
-            ev = st.selectbox("Parada cercana al evento", ["(ninguno)"] + [it["nombre"] for it in items])
+            ev = st.selectbox("Parada cercana al evento",
+                              ["(ninguno)"] + [it["nombre"] for it in items])
             if ev != "(ninguno)":
                 for it in items:
                     if it["nombre"] == ev:
                         it["valor"] = vmax * 2 + 1
                         it["nivel"] = "Alta"
 
-    items.sort(key=lambda d: d["valor"], reverse=True)
+    # La demanda es por distrito, así que varias paradas comparten valor. Deshacemos
+    # el empate por número de plazas en lugar de dejarlo al orden del CSV.
+    items.sort(key=lambda d: (d["valor"], d.get("plazas", 0)), reverse=True)
+
+    if not items:
+        st.info("Aún no tengo las paradas (`paradas_terrassa.csv`) "
+                "o el mapa (`terrassa_distritos.geojson`).")
+        return
+
+    top = items[0]
+    tope = max((i["valor"] for i in items), default=0) or 1
+    hero(top, dia, hora, top.get("distrito"), round(100 * top["valor"] / tope))
 
     if festivo:
         st.info("Hoy es festivo: uso el patrón de demanda de un domingo.")
@@ -418,39 +651,43 @@ def modo_conductor(perfil, geo, nombres, paradas, noche):
     if clima and clima.get("lluvia", 0) > 0:
         st.info("Está lloviendo ahora mismo: suele haber más carreras.")
 
-    if items:
-        top = items[0]
-        st.markdown(
-            f'<div class="hero">'
-            f'<div class="hero-label">Ahora ({DIAS[dia]}, {hora:02d}:00), ve a</div>'
-            f'<div class="hero-stand">{top["nombre"]}</div>'
-            f'<span class="badge">Demanda {top["nivel"].lower()}</span>'
-            f'<div class="hero-why">Es la parada con más movimiento previsto a esta hora.</div>'
-            f'</div>', unsafe_allow_html=True)
-        dibujar_mapa_paradas(items, noche)
-        st.markdown("**Ranking de paradas**")
-        filas = ""
-        for i, it in enumerate(items[:8], 1):
-            filas += (f'<div class="rank"><div class="num">{i}</div>'
-                      f'<div class="nom">{it["nombre"]}</div>'
-                      f'<div class="lvl" style="color:{COLOR[it["nivel"]]}">{it["nivel"]}</div></div>')
-        st.markdown(filas, unsafe_allow_html=True)
-    else:
-        st.info("Aún no tengo las paradas (`paradas_terrassa.csv`) o el mapa (`terrassa_distritos.geojson`).")
+    dibujar_mapa_paradas(items, oscuro)
+    encabezado("trend", "Ranking de paradas")
+    ranking(items)
 
 
-def modo_registrar():
-    st.subheader("Registrar un ticket")
-    st.caption("Haz una foto del ticket o sube varias. Revisas los datos y se guardan en el registro.")
+def vista_registrar():
+    encabezado("receipt", "Registrar un ticket")
+    st.markdown('<div class="tt-sub">Haz una foto del ticket o sube varias. '
+                'Revisas los datos y se guardan en tu registro.</div>', unsafe_allow_html=True)
+
     api_key = obtener_api_key()
     if not api_key:
         api_key = st.text_input("Clave de Google AI Studio", type="password")
-    foto = st.camera_input("Hacer una foto ahora")
-    subidas = st.file_uploader("...o subir varias fotos", type=["jpg", "jpeg", "png"],
-                               accept_multiple_files=True)
-    imagenes = ([foto] if foto is not None else []) + (subidas or [])
 
-    if imagenes and api_key and st.button(f"Leer {len(imagenes)} ticket(s)"):
+    fuente = st.segmented_control("Origen de las fotos", ["Hacer una foto", "Subir fotos"],
+                                  default="Hacer una foto", label_visibility="collapsed",
+                                  key="tt_fuente") or "Hacer una foto"
+
+    imagenes = []
+    if fuente == "Hacer una foto":
+        foto = st.camera_input("Enfoca el ticket", label_visibility="collapsed")
+        if foto is not None:
+            imagenes = [foto]
+    else:
+        subidas = st.file_uploader("Fotos de tickets", type=["jpg", "jpeg", "png"],
+                                   accept_multiple_files=True, label_visibility="collapsed")
+        imagenes = list(subidas or [])
+
+    if not imagenes:
+        pasos([
+            ("Fotografía el ticket", "Con la cámara del móvil, sin escribir nada."),
+            ("Revisa los datos", "Fecha, hora, zona, kilómetros e importe."),
+            ("Guarda la carrera", "Se suma a tu registro y a los gráficos de Análisis."),
+        ])
+
+    if imagenes and api_key and st.button(f"Leer {len(imagenes)} ticket(s)", type="primary",
+                                          use_container_width=True):
         filas = []
         barra = st.progress(0.0)
         for i, img in enumerate(imagenes, 1):
@@ -459,13 +696,15 @@ def modo_registrar():
             except Exception as e:
                 st.error(f"No pude leer {getattr(img, 'name', 'la foto')}: {e}")
             barra.progress(i / len(imagenes))
+        barra.empty()
         if filas:
             st.session_state["tickets"] = pd.DataFrame(filas)
 
     if "tickets" in st.session_state:
-        st.markdown("**Revisa y corrige antes de guardar:**")
-        editado = st.data_editor(st.session_state["tickets"], use_container_width=True, num_rows="dynamic")
-        if st.button("Añadir al registro"):
+        encabezado("grid", "Revisa y corrige antes de guardar")
+        editado = st.data_editor(st.session_state["tickets"], use_container_width=True,
+                                 num_rows="dynamic", key="tt_editor")
+        if st.button("Añadir al registro", type="primary", use_container_width=True):
             try:
                 destino = guardar(editado)
                 st.success(f"Añadidas {len(editado)} carrera(s) al registro ({destino}).")
@@ -474,117 +713,136 @@ def modo_registrar():
                 st.error(f"No pude guardar: {e}")
 
 
-def modo_analisis(perfil, nombres):
+def vista_analisis(perfil, nombres, oscuro):
     try:
         import plotly.express as px
         tiene_px = True
     except Exception:
         tiene_px = False
 
-    st.subheader("Patrón de demanda de Terrassa")
-    piv = perfil.pivot_table(index="id_str", columns="hour", values="viajes", aggfunc="mean")
-    piv.index = [nombres.get(i, i) for i in piv.index]
-    if tiene_px:
-        st.plotly_chart(px.imshow(piv, aspect="auto", color_continuous_scale="YlOrRd",
-                                  labels={"x": "Hora", "y": "Zona", "color": "Demanda"}),
-                        use_container_width=True)
-    else:
-        st.dataframe(piv)
+    st.markdown('<div class="tt-h" style="margin-top:4px">Análisis</div>'
+                '<div class="tt-sub">Patrón de demanda de Terrassa y rentabilidad '
+                'de tus carreras.</div>', unsafe_allow_html=True)
 
-    if Path(NYC_PARQUET).exists():
-        st.divider()
-        st.subheader("Transferencia: NYC vs Terrassa")
-        nyc = pd.read_parquet(NYC_PARQUET)
-        nh = nyc.groupby("hora")["demanda"].mean()
-        th = perfil.groupby("hour")["viajes"].mean()
-        comp = pd.DataFrame({"NYC (taxi)": nh / nh.sum(), "Terrassa": th / th.sum()})
-        st.line_chart(comp)
-        r = np.corrcoef(comp["NYC (taxi)"], comp["Terrassa"])[0, 1]
-        st.metric("Correlación de la forma horaria", f"r = {r:.3f}")
-
-    st.divider()
-    st.subheader("Tu rentabilidad (datos reales)")
+    # --- Rentabilidad real, arriba porque es lo que el conductor mira primero ---
     reg = leer_registro()
     if reg is None or len(reg) == 0:
+        tarjetas_metrica([("route", "—", "Carreras"), ("euro", "—", "Ingresos"),
+                          ("gauge", "—", "€/km")])
         st.info("Aún no hay carreras registradas. Aparecerán aquí en cuanto subas tickets.")
+        imp = None
     else:
         imp = pd.to_numeric(reg.get("importe_eur"), errors="coerce")
         km = pd.to_numeric(reg.get("distancia_km"), errors="coerce")
         total, tot_km = imp.sum(), km.sum()
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Carreras", int(imp.notna().sum()))
-        m2.metric("Ingresos", f"{total:,.2f} €")
-        m3.metric("€/km medio", f"{total / tot_km:.2f}" if tot_km and not np.isnan(tot_km) else "—")
-        if "hora_recogida" in reg.columns:
-            horas = pd.to_datetime(reg["hora_recogida"], errors="coerce", format="%H:%M").dt.hour
-            por_hora = imp.groupby(horas).sum().dropna()
-            if len(por_hora):
-                st.markdown("**Tus mejores horas (ingresos)**")
-                st.bar_chart(por_hora)
+        eur_km = f"{total / tot_km:.2f}" if tot_km and not np.isnan(tot_km) else "—"
+        tarjetas_metrica([("route", int(imp.notna().sum()), "Carreras"),
+                          ("euro", f"{total:,.0f} €".replace(",", "."), "Ingresos"),
+                          ("gauge", eur_km, "€/km")])
+
+    # --- Selector de día ---
+    dia = st.segmented_control("Día de la semana", list(DIAS),
+                               format_func=lambda d: DIAS_CORTO[d],
+                               default=dt.datetime.now().isoweekday(),
+                               label_visibility="collapsed", key="tt_dia")
+    if dia is None:
+        dia = dt.datetime.now().isoweekday()
+
+    sub = perfil[perfil["dow"] == dia]
+
+    encabezado("chart", "Demanda media por hora")
+    por_hora = sub.groupby("hour")["viajes"].mean().reindex(range(24))
+    if tiene_px:
+        fig = px.line(x=por_hora.index, y=por_hora.values)
+        fig.update_traces(line=dict(color=ROJO, width=3.2, shape="spline", smoothing=0.9),
+                          hovertemplate="%{x}:00 · %{y:,.0f} viajes<extra></extra>")
+        fig.update_yaxes(rangemode="tozero")
+        st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=250),
+                        use_container_width=True, config={"displayModeBar": False})
+    else:
+        st.line_chart(por_hora)
+
+    encabezado("grid", "Mapa de calor por parada")
+    piv = sub.pivot_table(index="id_str", columns="hour", values="viajes", aggfunc="mean")
+    piv = piv.reindex(columns=range(24))
+    piv.index = [ALIAS_DISTRITO.get(nombres.get(i, i), nombres.get(i, i)) for i in piv.index]
+    piv = piv.loc[piv.mean(axis=1).sort_values(ascending=False).index]
+    if tiene_px:
+        fig = px.imshow(piv, aspect="auto",
+                        color_continuous_scale=ESCALA["dark" if oscuro else "light"])
+        fig.update_traces(xgap=3, ygap=3,
+                          hovertemplate="%{y} · %{x}:00 · %{z:,.0f}<extra></extra>")
+        fig.update_coloraxes(showscale=False)
+        st.plotly_chart(estilo_grafico(fig, oscuro, alto=300), use_container_width=True,
+                        config={"displayModeBar": False})
+    else:
+        st.dataframe(piv, use_container_width=True)
+
+    # --- Transferencia NYC (sin cambios de lógica) ---
+    if NYC_PARQUET.exists():
+        encabezado("trend", "Transferencia: NYC vs Terrassa")
+        nyc = pd.read_parquet(NYC_PARQUET)
+        nh = nyc.groupby("hora")["demanda"].mean()
+        th = perfil.groupby("hour")["viajes"].mean()
+        comp = pd.DataFrame({"NYC (taxi)": nh / nh.sum(), "Terrassa": th / th.sum()})
+        r = np.corrcoef(comp["NYC (taxi)"], comp["Terrassa"])[0, 1]
+        if tiene_px:
+            fig = px.line(comp)
+            fig.update_traces(line=dict(width=2.8, shape="spline", smoothing=0.9))
+            fig.data[0].line.color = "#9AA5B1"
+            fig.data[1].line.color = ROJO
+            fig.update_layout(showlegend=True,
+                              legend=dict(orientation="h", y=1.15, x=0, title_text=""))
+            st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=240),
+                            use_container_width=True, config={"displayModeBar": False})
+        else:
+            st.line_chart(comp)
+        tarjetas_metrica([("trend", f"r = {r:.3f}", "Correlación horaria"),
+                          ("clock", f"{int(th.idxmax()):02d}:00", "Pico Terrassa"),
+                          ("clock", f"{int(nh.idxmax()):02d}:00", "Pico NYC")])
+
+    # --- Mejores horas del conductor ---
+    if imp is not None and "hora_recogida" in reg.columns:
+        horas = pd.to_datetime(reg["hora_recogida"], errors="coerce", format="%H:%M").dt.hour
+        ingresos = imp.groupby(horas).sum().dropna()
+        if len(ingresos):
+            encabezado("euro", "Tus mejores horas")
+            if tiene_px:
+                fig = px.bar(x=ingresos.index, y=ingresos.values)
+                fig.update_traces(marker_color=ROJO, marker_line_width=0,
+                                  hovertemplate="%{x}:00 · %{y:,.2f} €<extra></extra>")
+                st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=230),
+                                use_container_width=True, config={"displayModeBar": False})
+            else:
+                st.bar_chart(ingresos)
 
 
-# =============================== Navegación y página ===============================
-ICONOS = {
-    "conductor": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-                 'stroke-linecap="round" stroke-linejoin="round"><path d="M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11z"/>'
-                 '<circle cx="12" cy="10" r="2.5"/></svg>',
-    "registrar": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-                 'stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/>'
-                 '<path d="M9 7h6M9 11h6"/></svg>',
-    "analisis": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-                'stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-8"/>'
-                '<path d="M2 20h20"/></svg>',
-}
-MOON = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-        'stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>')
-
-
-def _nav_url(modo=None, noche=None):
-    cur = st.query_params
-    m = modo if modo is not None else cur.get("modo", "conductor")
-    n = noche if noche is not None else cur.get("noche", "0")
-    return f"?modo={m}&noche={n}"
-
-
-def bottom_nav(activo):
-    labels = {"conductor": "Conductor", "registrar": "Registrar", "analisis": "Análisis"}
-    links = ""
-    for k in ("conductor", "registrar", "analisis"):
-        cls = "active" if k == activo else ""
-        links += (f'<a class="{cls}" target="_self" href="{_nav_url(modo=k)}">'
-                  f'{ICONOS[k]}<span>{labels[k]}</span></a>')
-    return f'<div class="bottomnav">{links}</div>'
-
-
+# =============================== Página ===============================
 def main():
+    oscuro = tema_oscuro()
+    inyectar_css(oscuro)
+
     perfil = cargar_perfil()
     geo, nombres = cargar_geo()
     paradas = cargar_paradas()
 
-    st.markdown(CSS, unsafe_allow_html=True)
-    modo_key = st.query_params.get("modo", "conductor")
-    if modo_key not in ("conductor", "registrar", "analisis"):
-        modo_key = "conductor"
-    noche = st.query_params.get("noche", "0") == "1"
-    if noche:
-        st.markdown(CSS_NIGHT, unsafe_allow_html=True)
-
-    c1, c2 = st.columns([5, 1])
-    c1.markdown('<div class="brandbar"><div class="avatar">T</div>'
-                '<div><div class="title">Taxi<b>Terrassa</b></div>'
-                '<div class="sub">Dónde hay trabajo, ahora mismo</div></div></div>',
-                unsafe_allow_html=True)
-    c2.markdown(f'<a class="nightbtn" target="_self" href="{_nav_url(noche="0" if noche else "1")}">{MOON}</a>',
+    st.markdown('<div class="tt-brand"><div class="av">T</div>'
+                '<div><div class="nm">Taxi<b>Terrassa</b></div>'
+                '<div class="sb">Dónde hay trabajo, ahora mismo</div></div></div>',
                 unsafe_allow_html=True)
 
-    if modo_key == "conductor":
-        modo_conductor(perfil, geo, nombres, paradas, noche)
-    elif modo_key == "registrar":
-        modo_registrar()
+    vista = st.session_state.get("tt_vista") or "Conductor"
+    if vista == "Conductor":
+        vista_conductor(perfil, geo, nombres, paradas, oscuro)
+    elif vista == "Registrar":
+        vista_registrar()
     else:
-        modo_analisis(perfil, nombres)
+        vista_analisis(perfil, nombres, oscuro)
 
-    st.markdown(bottom_nav(modo_key), unsafe_allow_html=True)
+    # Navegación inferior fija. Se dibuja al final para que el estado ya esté leído arriba.
+    with st.container(key="tt_nav"):
+        st.segmented_control("Vista", VISTAS, default="Conductor",
+                             label_visibility="collapsed", key="tt_vista")
 
 
 if __name__ == "__main__":

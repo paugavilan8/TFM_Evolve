@@ -10,19 +10,24 @@ Qué hace:
   3. Calcula el BASELINE ingenuo ("misma hora, semana anterior") con MAE / RMSE / WAPE.
      → Ese es el número que Prophet / LightGBM / LSTM tendrán que batir en la Fase 2.
 
-Entrada:  data/processed/demanda_nyc_2023.parquet      (de la Fase 1)
-Salida:   data/processed/demanda_features_2023.parquet (lista para modelar)
+Entrada:  data/processed/demanda_nyc_2023.parquet   (de la Fase 1)
+Salida:   data/gold/demanda_features_2023.parquet    (lista para modelar)
 
 Ejecuta en TU máquina, con el venv activado:
     python -m pip install pandas pyarrow numpy holidays
     python fase2_features_baseline.py
 """
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-IN_PATH = "data/processed/demanda_nyc_2023.parquet"
-OUT_PATH = "data/processed/demanda_features_2023.parquet"
+# Raíz del proyecto (este script vive en pipeline/), para que las rutas de datos
+# no dependan del directorio desde el que lo lances.
+ROOT = Path(__file__).resolve().parents[1]
+IN_PATH = ROOT / "data" / "processed" / "demanda_nyc_2023.parquet"
+OUT_PATH = ROOT / "data" / "gold" / "demanda_features_2023.parquet"
 TEST_START = "2023-11-01"   # división TEMPORAL: nunca al azar (el modelo no debe "ver el futuro")
 
 # ----------------------------- Cargar -----------------------------
@@ -96,6 +101,7 @@ FEATURES = [
     "hora", "hora_sin", "hora_cos", "dia_semana", "es_finde", "mes", "dia_mes",
     "es_festivo", "zona", "lag_1h", "lag_24h", "lag_168h", "roll_24h", "roll_168h",
 ]
+OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
 df.to_parquet(OUT_PATH, index=False)
 
 n_train = (df["set"] == "train").sum()

@@ -8,8 +8,8 @@ Compara, sobre la MISMA división temporal (entrena ene-oct, valida nov-dic):
 Cada modelo predice lo mismo: la demanda por (zona, hora) en el test, y se evalúa
 con MAE / RMSE / WAPE. El objetivo es BATIR el baseline.
 
-Entrada:  data/processed/demanda_features_2023.parquet   (de fase2_features_baseline.py)
-Salida:   resultados_comparativa.csv                      (tu tabla para la memoria)
+Entrada:  data/gold/demanda_features_2023.parquet   (de fase2_features_baseline.py)
+Salida:   results/resultados_comparativa.csv          (tu tabla para la memoria)
 
 Ejecuta en TU máquina, con el venv activado:
     python -m pip install lightgbm prophet pandas pyarrow numpy
@@ -24,13 +24,19 @@ en esa muestra se recalculan también Baseline y LightGBM (Tabla B).
 import logging
 import warnings
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
 logging.getLogger("cmdstanpy").setLevel(logging.ERROR)
 
-IN_PATH = "data/processed/demanda_features_2023.parquet"
+# Raíz del proyecto (este script vive en pipeline/), para que las rutas de datos
+# no dependan del directorio desde el que lo lances.
+ROOT = Path(__file__).resolve().parents[1]
+IN_PATH = ROOT / "data" / "gold" / "demanda_features_2023.parquet"
+RESULTS_DIR = ROOT / "results"
 TARGET = "demanda"
 FEATURES = [
     "hora", "hora_sin", "hora_cos", "dia_semana", "es_finde", "mes", "dia_mes",
@@ -144,7 +150,7 @@ print(tabla_b.to_string())
 
 # Guardar para la memoria
 out = pd.concat([tabla_a, tabla_b])
-out.to_csv("resultados_comparativa.csv")
+out.to_csv(RESULTS_DIR / "resultados_comparativa.csv")
 print("\n→ Guardado: resultados_comparativa.csv")
 
 # Veredicto rápido

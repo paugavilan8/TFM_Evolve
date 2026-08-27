@@ -1,12 +1,25 @@
-streamlit
-folium
-streamlit-folium
-branca
-plotly
-pandas
-openpyxl
-google-generativeai
-gspread
-google-auth
-pillow
-holidays
+# Dependencias de la APP (Streamlit Cloud lee este fichero).
+# Versiones fijadas a las del entorno con el que se desarrolló y validó el TFM.
+# Para reproducir el pipeline de modelado, usa requirements-pipeline.txt.
+
+# --- núcleo ---
+streamlit==1.58.0
+pandas==3.0.3
+numpy==2.4.6
+pyarrow==24.0.0          # lectura del parquet de demanda NYC en la vista Análisis
+
+# --- mapa y gráficos ---
+folium==0.20.0
+streamlit-folium==0.27.2
+branca==0.8.2
+plotly==6.8.0
+
+# --- escáner de tickets (Gemini) y registro (Google Sheets / Excel) ---
+google-generativeai==0.8.6
+gspread==6.2.1
+google-auth==2.55.0
+pillow==12.2.0
+openpyxl==3.1.5
+
+# --- calendario ---
+holidays==0.99

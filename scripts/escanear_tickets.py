@@ -15,7 +15,7 @@ Claves necesarias (en .streamlit/secrets.toml y/o en los Secrets de Streamlit Cl
 
 Ejecutar:
     python -m pip install streamlit google-generativeai gspread google-auth openpyxl pillow pandas
-    python -m streamlit run escanear_tickets.py
+    python -m streamlit run scripts/escanear_tickets.py
 """
 
 import io
@@ -27,7 +27,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-REGISTRO = "Registro_carreras_TFM.xlsx"
+REGISTRO = Path(__file__).resolve().parents[1] / "data" / "registro" / "Registro_carreras_TFM.xlsx"
 MODELO = "gemini-2.5-flash"
 COLUMNAS = ["fecha", "hora_recogida", "hora_fin", "zona_recogida", "zona_destino",
             "distancia_km", "importe_eur", "origen_servicio", "tarifa"]

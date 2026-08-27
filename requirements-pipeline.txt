@@ -1,0 +1,26 @@
+# Dependencias del PIPELINE de datos y modelado (Fases 1-3).
+# No hacen falta para desplegar la app; instálalas solo en tu máquina:
+#     python -m pip install -r requirements-pipeline.txt
+
+# --- datos ---
+duckdb==1.5.4            # agregación de los 38 M de viajes sin cargarlos en RAM
+pandas==3.0.3
+numpy==2.4.6
+pyarrow==24.0.0
+holidays==0.99
+
+# --- modelos ---
+lightgbm==4.6.0
+scikit-learn==1.9.0      # requerido por la API sklearn de LightGBM (LGBMRegressor)
+prophet==1.3.0
+
+# Solo para fase2_lstm.py. Única dependencia sin fijar: aún no está instalada
+# en el entorno, así que no hay versión validada que anclar. Al instalarla,
+# sustituye por la versión exacta que te quede (python -m pip freeze | grep tensorflow).
+tensorflow>=2.16,<3
+
+# --- notebooks (EDA y comparación) ---
+matplotlib==3.11.0
+seaborn==0.13.2
+jupyterlab==4.5.9
+ipykernel==7.3.0

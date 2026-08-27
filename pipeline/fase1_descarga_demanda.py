@@ -16,13 +16,18 @@ Uso:         python fase1_descarga_demanda.py
 
 import os
 import urllib.request
+from pathlib import Path
+
 import duckdb
 
 # ----------------------------- Configuración -----------------------------
 YEAR = 2023                       # 1 año reciente = estacionalidad completa. Evita 2020-2021 (COVID).
 MONTHS = range(1, 13)
-RAW_DIR = "data/raw"
-OUT_DIR = "data/processed"
+# Raíz del proyecto (este script vive en pipeline/), para que las rutas de datos
+# no dependan del directorio desde el que lo lances.
+ROOT = Path(__file__).resolve().parents[1]
+RAW_DIR = ROOT / "data" / "raw"          # parquet originales de la TLC
+OUT_DIR = ROOT / "data" / "processed"    # tabla de demanda agregada
 BASE = "https://d37ci6vzurychx.cloudfront.net/trip-data"            # host de descarga que enlaza la TLC
 ZONE_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
 EXPORT_CSV = False                # el CSV de la rejilla completa es grande (~2M filas). Parquet basta.
@@ -30,8 +35,8 @@ EXPORT_CSV = False                # el CSV de la rejilla completa es grande (~2M
 #   https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page
 # -------------------------------------------------------------------------
 
-os.makedirs(RAW_DIR, exist_ok=True)
-os.makedirs(OUT_DIR, exist_ok=True)
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+OUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def download(url, dest):
@@ -46,14 +51,15 @@ def download(url, dest):
 print("1) Descargando ficheros (puede tardar; ~50-60 MB por mes)...")
 for m in MONTHS:
     fn = f"yellow_tripdata_{YEAR}-{m:02d}.parquet"
-    download(f"{BASE}/{fn}", os.path.join(RAW_DIR, fn))
-zone_csv = os.path.join(RAW_DIR, "taxi_zone_lookup.csv")
+    download(f"{BASE}/{fn}", RAW_DIR / fn)
+zone_csv = RAW_DIR / "taxi_zone_lookup.csv"
 download(ZONE_URL, zone_csv)
 
 # 2) + 3) Agregar y rellenar ceros con DuckDB ------------------------------
 print("2) Agregando viajes -> tabla de demanda (zona × fecha × hora)...")
 con = duckdb.connect()
-glob = os.path.join(RAW_DIR, f"yellow_tripdata_{YEAR}-*.parquet")
+# as_posix(): DuckDB recibe las rutas con '/' también en Windows.
+glob = (RAW_DIR / f"yellow_tripdata_{YEAR}-*.parquet").as_posix()
 
 # Conteos observados (solo zona-hora que SÍ tuvieron viajes)
 con.execute(f"""
@@ -91,7 +97,7 @@ LEFT JOIN conteos c USING (zona, fecha, hora)
 con.execute(f"""
 CREATE TABLE zonas AS
 SELECT LocationID AS zona, Zone AS nombre_zona, Borough AS distrito
-FROM read_csv_auto('{zone_csv}')
+FROM read_csv_auto('{zone_csv.as_posix()}')
 """)
 
 con.execute("""
@@ -108,11 +114,11 @@ ORDER BY d.zona, d.fecha, d.hora
 """)
 
 # Guardar ------------------------------------------------------------------
-out_parquet = os.path.join(OUT_DIR, f"demanda_nyc_{YEAR}.parquet")
-con.execute(f"COPY demanda_final TO '{out_parquet}' (FORMAT PARQUET)")
+out_parquet = OUT_DIR / f"demanda_nyc_{YEAR}.parquet"
+con.execute(f"COPY demanda_final TO '{out_parquet.as_posix()}' (FORMAT PARQUET)")
 if EXPORT_CSV:
-    out_csv = os.path.join(OUT_DIR, f"demanda_nyc_{YEAR}.csv")
-    con.execute(f"COPY demanda_final TO '{out_csv}' (HEADER, DELIMITER ',')")
+    out_csv = OUT_DIR / f"demanda_nyc_{YEAR}.csv"
+    con.execute(f"COPY demanda_final TO '{out_csv.as_posix()}' (HEADER, DELIMITER ',')")
 
 # Resumen rápido (un mini-EDA de sanidad)
 n, nz, tot = con.execute(
