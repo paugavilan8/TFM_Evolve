@@ -45,13 +45,21 @@ NYC_PARQUET = DATA_DIR / "processed" / "demanda_nyc_2023.parquet"
 CENTRO = [41.5631, 2.0089]
 DIAS = {1: "Lunes", 2: "Martes", 3: "Miércoles", 4: "Jueves", 5: "Viernes", 6: "Sábado", 7: "Domingo"}
 DIAS_CORTO = {1: "Lun", 2: "Mar", 3: "Mié", 4: "Jue", 5: "Vie", 6: "Sáb", 7: "Dom"}
-VISTAS = ["Conductor", "Registrar", "Análisis"]
+# Navegación inferior: (etiqueta, icono Material de Streamlit)
+NAV = [("Conductor", "explore"), ("Registrar", "receipt_long"), ("Análisis", "insights")]
 
 # Paleta única: rojo de marca + ámbar + gris. La demanda alta es ROJA (antes era verde,
 # lo que contradecía el resto de la interfaz).
 ROJO = "#C0392B"
 ROJO_OSCURO = "#8E2018"
 COLOR = {"Alta": "#C0392B", "Media": "#E0902E", "Baja": "#9AA5B1"}
+# Sobre fondo oscuro el rojo de marca se queda en 3,2:1 de contraste, y WCAG AA pide
+# 4,5:1 para texto pequeño. Sólo "Alta" necesita aclararse; ámbar y gris ya cumplen.
+COLOR_OSCURO = {**COLOR, "Alta": "#E4715C"}
+
+
+def colores(oscuro: bool) -> dict:
+    return COLOR_OSCURO if oscuro else COLOR
 
 # El geojson trae nombres genéricos ("Terrassa distrito 01"). Rellena esto con los
 # barrios reales y aparecerán en el chip del hero y en el mapa de calor.
@@ -83,10 +91,13 @@ Convierte las comas decimales a punto."""
 # Los widgets nativos de Streamlit siguen [theme] / [theme.dark] de config.toml.
 # Aquí sólo definimos los tokens de las tarjetas propias, alineados con ese tema.
 TOKENS = {
-    "light": {"bg": "#F4F5F7", "surface": "#FFFFFF", "ink": "#1A1A1A", "muted": "#7A828C",
-              "line": "#EAEDF1", "shadow": "rgba(20,32,43,.07)", "wash": "#FCEDEB"},
+    # muted era #7A828C: 3,9:1 sobre blanco, por debajo de AA. #6B7280 da 4,8:1.
+    "light": {"bg": "#F4F5F7", "surface": "#FFFFFF", "ink": "#1A1A1A", "muted": "#6B7280",
+              "line": "#EAEDF1", "shadow": "rgba(20,32,43,.07)", "wash": "#FCEDEB",
+              "red-ink": "#C0392B"},
     "dark": {"bg": "#0E1117", "surface": "#161B22", "ink": "#E6EDF3", "muted": "#9AA5B1",
-             "line": "#2B333D", "shadow": "rgba(0,0,0,.45)", "wash": "#25181A"},
+             "line": "#2B333D", "shadow": "rgba(0,0,0,.45)", "wash": "#25181A",
+             "red-ink": "#E4715C"},
 }
 ESCALA = {
     "light": [[0.0, "#FDF0EE"], [0.35, "#F0B4A8"], [0.7, "#D2604F"], [1.0, "#8E2018"]],
@@ -109,7 +120,9 @@ ICONO = {
 CSS_BASE = """
 .stApp { background: var(--tt-bg); }
 footer, [data-testid="stDecoration"], [data-testid="stStatusWidget"] { display: none !important; }
-.block-container { padding: 1rem .9rem 7rem !important; max-width: 780px; }
+/* El header fijo de Streamlit ocupa 56px. Sin este hueco, la cabecera de marca
+   queda por debajo y se ve cortada. */
+.block-container { padding: calc(56px + 1rem) .9rem 7.5rem !important; max-width: 780px; }
 h1, h2, h3 { letter-spacing: -.02em; }
 
 /* ---------- Cabecera de marca ---------- */
@@ -145,20 +158,25 @@ h1, h2, h3 { letter-spacing: -.02em; }
 .tt-why { opacity: .92; font-size: .93rem; margin: 14px 0 0; }
 
 /* ---------- Ranking de paradas ---------- */
-.tt-rank { display: flex; align-items: center; gap: 14px; padding: 13px 16px;
-  background: var(--tt-surface); border: 1px solid var(--tt-line); border-radius: 16px;
-  margin-bottom: 9px; box-shadow: 0 3px 10px var(--tt-shadow); }
-.tt-rank .n { width: 30px; height: 30px; border-radius: 50%; flex: none; display: flex;
+.tt-rank { display: flex; align-items: center; gap: 16px; padding: 16px 20px;
+  background: var(--tt-surface); border: 1px solid var(--tt-line); border-radius: 20px;
+  margin-bottom: 10px; box-shadow: 0 3px 10px var(--tt-shadow); }
+/* La primera parada es justo la del hero: se destaca con el lavado de marca para que
+   la recomendación se reconozca también dentro de la lista. */
+.tt-rank.top { background: var(--tt-wash); border-color: transparent; }
+.tt-rank .n { width: 34px; height: 34px; border-radius: 50%; flex: none; display: flex;
   align-items: center; justify-content: center; background: var(--tt-wash);
-  color: var(--tt-red); font-weight: 700; font-size: .84rem; }
+  color: var(--tt-ink); font-weight: 700; font-size: .88rem; }
+.tt-rank.top .n { background: var(--tt-surface); }
 .tt-rank .bd { flex: 1; min-width: 0; }
-.tt-rank .nombre { display: flex; align-items: center; gap: 6px; font-weight: 600;
-  font-size: .95rem; color: var(--tt-ink); margin-bottom: 7px; }
-.tt-rank .nombre svg { width: 15px; height: 15px; color: var(--tt-muted); flex: none; }
+.tt-rank .nombre { display: flex; align-items: center; gap: 7px; font-weight: 600;
+  font-size: 1.02rem; color: var(--tt-ink); margin-bottom: 10px; }
+.tt-rank .nombre svg { width: 16px; height: 16px; color: var(--tt-muted); flex: none; }
 .tt-rank .nombre span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tt-bar { height: 6px; border-radius: 999px; background: var(--tt-wash); overflow: hidden; }
+.tt-bar { height: 7px; border-radius: 999px; background: var(--tt-wash); overflow: hidden; }
+.tt-rank.top .tt-bar { background: var(--tt-surface); }
 .tt-bar i { display: block; height: 100%; border-radius: 999px; }
-.tt-rank .lvl { font-size: .8rem; font-weight: 700; flex: none; }
+.tt-rank .lvl { font-size: .85rem; font-weight: 700; flex: none; }
 
 /* ---------- Tarjetas de métrica ---------- */
 .tt-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 6px; }
@@ -180,30 +198,58 @@ h1, h2, h3 { letter-spacing: -.02em; }
 .tt-step .d { color: var(--tt-muted); font-size: .86rem; margin-top: 2px; }
 
 /* ---------- Leyenda del mapa ---------- */
-.tt-leg { display: flex; gap: 16px; justify-content: center; margin: 10px 0 4px;
-  font-size: .82rem; color: var(--tt-muted); }
+.tt-leg { display: flex; gap: 14px; justify-content: center; width: fit-content;
+  margin: 12px auto 4px; padding: 7px 16px; border-radius: 999px;
+  background: var(--tt-surface); border: 1px solid var(--tt-line);
+  box-shadow: 0 3px 10px var(--tt-shadow);
+  font-size: .8rem; font-weight: 600; color: var(--tt-muted); }
 .tt-leg span { display: inline-flex; align-items: center; gap: 6px; }
 .tt-leg i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
 
 /* ---------- "Ahora mismo" como tarjeta ---------- */
 .st-key-tt_ahora { background: var(--tt-surface); border: 1px solid var(--tt-line);
-  border-radius: 16px; padding: 6px 16px; box-shadow: 0 4px 12px var(--tt-shadow); }
+  border-radius: 16px; padding: 12px 18px; box-shadow: 0 4px 12px var(--tt-shadow);
+  margin-bottom: 14px; }
+/* Las columnas de Streamlit no centran ni empujan por sí solas: hay que centrar la
+   fila y mandar el toggle al extremo derecho. */
+.st-key-tt_ahora [data-testid="stHorizontalBlock"] { align-items: center; }
+.st-key-tt_ahora [data-testid="stColumn"] > div { display: flex; align-items: center;
+  min-height: 30px; }
+/* El contenedor del toggle se encoge a su contenido (38px), así que no basta con
+   alinear: hay que estirarlo primero. 'st-key-tt_vivo' viene de la key del widget. */
+.st-key-tt_ahora .st-key-tt_vivo { width: 100% !important; display: flex;
+  justify-content: flex-end; }
+.st-key-tt_ahora [data-testid="stCheckbox"] { justify-content: flex-end; }
 .tt-inline { display: flex; align-items: center; gap: 9px; font-weight: 600;
   color: var(--tt-ink); font-size: .96rem; }
-.tt-inline svg { width: 18px; height: 18px; color: var(--tt-red); }
+.tt-inline svg { width: 18px; height: 18px; color: var(--tt-red); flex: none; }
 
 /* ---------- Navegación inferior ---------- */
 .st-key-tt_nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 998;
   background: var(--tt-surface); border-top: 1px solid var(--tt-line);
   padding: .55rem 1rem calc(.55rem + env(safe-area-inset-bottom));
   box-shadow: 0 -6px 22px var(--tt-shadow); }
-.st-key-tt_nav > div { max-width: 780px; margin: 0 auto; }
-.st-key-tt_nav [data-baseweb="button-group"] { width: 100%; gap: 4px; }
-.st-key-tt_nav [data-baseweb="button-group"] button { flex: 1 1 0; border: none !important;
-  background: transparent !important; font-weight: 600; }
-.st-key-tt_nav [data-baseweb="button-group"] button[aria-checked="true"],
-.st-key-tt_nav [data-baseweb="button-group"] button[aria-pressed="true"] {
-  background: var(--tt-wash) !important; color: var(--tt-red) !important; }
+.st-key-tt_nav [data-testid="stHorizontalBlock"] { max-width: 780px; margin: 0 auto; gap: 0; }
+.st-key-tt_nav [data-testid="stColumn"] { min-width: 0; }
+/* Botón de navegación: icono arriba, etiqueta debajo, sin caja propia. */
+.st-key-tt_nav .stButton > button { background: transparent !important; border: none !important;
+  box-shadow: none !important; padding: 4px 0 2px !important; min-height: 0 !important;
+  color: var(--tt-muted) !important; }
+.st-key-tt_nav .stButton > button p { display: flex !important; flex-direction: column;
+  align-items: center; gap: 5px; margin: 0; line-height: 1.15;
+  font-size: .76rem; font-weight: 600; letter-spacing: .01em; }
+/* El icono es un <span role="img"> con estilos inline: hay que ganarle con !important. */
+.st-key-tt_nav .stButton > button span[role="img"] { font-size: 22px !important;
+  display: flex !important; width: 58px; height: 30px; border-radius: 999px;
+  align-items: center; justify-content: center; vertical-align: middle !important;
+  transition: background .16s ease, color .16s ease; }
+.st-key-tt_nav .stButton > button:hover { color: var(--tt-ink) !important; }
+.st-key-tt_nav .stButton > button:hover span[role="img"] { background: var(--tt-wash); }
+/* Vista activa: píldora roja rellena bajo el icono. La etiqueta usa --tt-red-ink,
+   que se aclara en oscuro para no bajar de 4,5:1 de contraste. */
+.st-key-tt_nav .stButton > button[kind="primary"] { color: var(--tt-red-ink) !important; }
+.st-key-tt_nav .stButton > button[kind="primary"] span[role="img"] {
+  background: var(--tt-red); color: #fff; }
 
 /* ---------- Retoques a widgets nativos ---------- */
 [data-testid="stVerticalBlockBorderWrapper"] { border-radius: 18px; }
@@ -212,8 +258,17 @@ iframe[title="streamlit_folium.st_folium"] { border-radius: 18px; }
 [data-testid="stExpander"] details { border-radius: 14px; border-color: var(--tt-line); }
 
 @media (max-width: 640px) {
-  .block-container { padding: .8rem .7rem 7rem !important; }
+  /* Ojo: también aquí hay que reservar los 56px del header fijo. */
+  .block-container { padding: calc(56px + .8rem) .7rem 7.5rem !important; }
+  /* Por debajo de 640px Streamlit apila las columnas (min-width: calc(100% - 22.5px)).
+     En esta tarjeta no queremos eso: etiqueta y toggle van en la misma línea. */
+  .st-key-tt_ahora [data-testid="stHorizontalBlock"] { flex-wrap: nowrap; }
+  .st-key-tt_ahora [data-testid="stColumn"] { min-width: 0 !important; }
+  .st-key-tt_ahora [data-testid="stColumn"]:last-child { flex: 0 0 auto !important; }
   .tt-title { font-size: 1.78rem; }
+  .tt-rank { padding: 13px 15px; gap: 12px; }
+  .tt-rank .nombre { font-size: .95rem; margin-bottom: 9px; }
+  .tt-rank .n { width: 30px; height: 30px; font-size: .84rem; }
   .tt-stats { gap: 7px; }
   .tt-stat { padding: 12px 12px; }
   .tt-stat .v { font-size: 1.28rem; }
@@ -442,14 +497,25 @@ def demanda_distritos(perfil, dia, hora):
     return s.groupby("id_str")["viajes"].mean()
 
 
-def nivel(v, vmax):
-    if vmax <= 0:
-        return "Baja"
-    if v >= 0.66 * vmax:
-        return "Alta"
-    if v >= 0.33 * vmax:
-        return "Media"
-    return "Baja"
+def niveles_por_tercil(valores):
+    """Reparte Alta / Media / Baja por terciles sobre los valores DISTINTOS.
+
+    Con umbrales fijos sobre el máximo (>=0,66 Alta, >=0,33 Media) "Baja" no salía
+    nunca: las 14 paradas viven entre el 0,47 y el 1,00 del máximo, porque el único
+    distrito que baja de ese umbral (0827907) no tiene ninguna parada de taxi.
+
+    Se trabaja sobre los valores distintos, no sobre las paradas, para que dos paradas
+    del mismo distrito -que por fuerza empatan- reciban siempre la misma etiqueta.
+    """
+    u = sorted(set(valores), reverse=True)
+    if not u:
+        return {}
+    if len(u) < 3:
+        return {v: ("Alta" if i == 0 else "Baja") for i, v in enumerate(u)}
+    corte_alta = u[(len(u) - 1) // 3]
+    corte_media = u[(2 * (len(u) - 1)) // 3]
+    return {v: "Alta" if v >= corte_alta else "Media" if v >= corte_media else "Baja"
+            for v in u}
 
 
 @st.cache_data
@@ -496,21 +562,23 @@ def hero(top, dia, hora, distrito, indice):
         f'</div>', unsafe_allow_html=True)
 
 
-def ranking(items, n=6):
+def ranking(items, oscuro, n=None):
     """Las barras se estiran sobre el rango visible (no sobre 0) porque la demanda
     entre distritos de Terrassa varía poco y, en absoluto, todas quedarían al 90-100%."""
-    vis = items[:n]
+    vis = items if n is None else items[:n]
     if not vis:
         return
+    paleta = colores(oscuro)
     vals = [i["valor"] for i in vis]
     lo, hi = min(vals), max(vals)
     span = (hi - lo) or 1.0
     filas = []
     for k, it in enumerate(vis, 1):
         pct = 100 if hi == lo else 20 + round(80 * (it["valor"] - lo) / span)
-        c = COLOR[it["nivel"]]
+        c = paleta[it["nivel"]]
+        clase = "tt-rank top" if k == 1 else "tt-rank"
         filas.append(
-            f'<div class="tt-rank"><div class="n">{k}</div><div class="bd">'
+            f'<div class="{clase}"><div class="n">{k}</div><div class="bd">'
             f'<div class="nombre">{ICONO["pin"]}<span>{esc(it["nombre"])}</span></div>'
             f'<div class="tt-bar"><i style="width:{pct}%;background:{c}"></i></div>'
             f'</div><div class="lvl" style="color:{c}">{esc(it["nivel"])}</div></div>')
@@ -533,9 +601,10 @@ def pasos(lista):
     st.markdown(html, unsafe_allow_html=True)
 
 
-def leyenda(niveles=None):
-    presentes = [k for k in COLOR if niveles is None or k in niveles]
-    partes = "".join(f'<span><i style="background:{COLOR[k]}"></i>{k}</span>' for k in presentes)
+def leyenda(oscuro, niveles=None):
+    paleta = colores(oscuro)
+    presentes = [k for k in paleta if niveles is None or k in niveles]
+    partes = "".join(f'<span><i style="background:{paleta[k]}"></i>{k}</span>' for k in presentes)
     st.markdown(f'<div class="tt-leg">{partes}</div>', unsafe_allow_html=True)
 
 
@@ -561,13 +630,14 @@ def dibujar_mapa_paradas(items, oscuro):
     except Exception:
         st.warning("Instala el mapa: python -m pip install folium streamlit-folium")
         return
+    paleta = colores(oscuro)
     tiles = "cartodbdark_matter" if oscuro else "cartodbpositron"
     m = folium.Map(location=CENTRO, zoom_start=14, tiles=tiles, zoom_control=False)
     for i, it in enumerate(items):
         if pd.isna(it["lat"]) or pd.isna(it["lon"]):
             continue
         es_top = (i == 0)
-        c = COLOR[it["nivel"]]
+        c = paleta[it["nivel"]]
         if es_top:
             folium.CircleMarker(location=[it["lat"], it["lon"]], radius=20, color=c,
                                 weight=2, fill=True, fill_color=c, fill_opacity=0.18,
@@ -580,12 +650,16 @@ def dibujar_mapa_paradas(items, oscuro):
             tooltip=f'{it["nombre"]} — demanda {it["nivel"].lower()}',
         ).add_to(m)
     st_folium(m, height=390, use_container_width=True, returned_objects=[])
-    leyenda({it["nivel"] for it in items})
+    leyenda(oscuro, {it["nivel"] for it in items})
 
 
 # =============================== Vistas ===============================
 def vista_conductor(perfil, geo, nombres, paradas, oscuro):
     ahora = dt.datetime.now()
+
+    # El hero es lo primero que hay que leer, pero depende de los controles que van
+    # debajo. Reservamos su hueco y lo rellenamos cuando ya sabemos día y hora.
+    hueco_hero = st.container()
 
     with st.container(key="tt_ahora"):
         c1, c2 = st.columns([4, 1], vertical_alignment="center")
@@ -618,7 +692,7 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
             v = float(dem.get(did, 0)) if did else 0.0
             nom_d = nombres.get(did, "")
             items.append({"nombre": p["nombre"], "lat": float(p["lat"]), "lon": float(p["lon"]),
-                          "valor": v, "nivel": nivel(v, vmax),
+                          "valor": v,
                           "distrito": ALIAS_DISTRITO.get(nom_d, nom_d),
                           "plazas": float(p.get("plazas") or 0)})
 
@@ -630,7 +704,12 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
                 for it in items:
                     if it["nombre"] == ev:
                         it["valor"] = vmax * 2 + 1
-                        it["nivel"] = "Alta"
+
+    # El nivel se calcula al final, sobre el conjunto ya completo (incluido el posible
+    # evento), para que mapa, leyenda y ranking usen exactamente la misma escala.
+    mapa_niveles = niveles_por_tercil([it["valor"] for it in items])
+    for it in items:
+        it["nivel"] = mapa_niveles[it["valor"]]
 
     # La demanda es por distrito, así que varias paradas comparten valor. Deshacemos
     # el empate por número de plazas en lugar de dejarlo al orden del CSV.
@@ -643,7 +722,8 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
 
     top = items[0]
     tope = max((i["valor"] for i in items), default=0) or 1
-    hero(top, dia, hora, top.get("distrito"), round(100 * top["valor"] / tope))
+    with hueco_hero:
+        hero(top, dia, hora, top.get("distrito"), round(100 * top["valor"] / tope))
 
     if festivo:
         st.info("Hoy es festivo: uso el patrón de demanda de un domingo.")
@@ -653,7 +733,7 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
 
     dibujar_mapa_paradas(items, oscuro)
     encabezado("trend", "Ranking de paradas")
-    ranking(items)
+    ranking(items, oscuro)
 
 
 def vista_registrar():
@@ -687,7 +767,7 @@ def vista_registrar():
         ])
 
     if imagenes and api_key and st.button(f"Leer {len(imagenes)} ticket(s)", type="primary",
-                                          use_container_width=True):
+                                          width="stretch"):
         filas = []
         barra = st.progress(0.0)
         for i, img in enumerate(imagenes, 1):
@@ -702,9 +782,9 @@ def vista_registrar():
 
     if "tickets" in st.session_state:
         encabezado("grid", "Revisa y corrige antes de guardar")
-        editado = st.data_editor(st.session_state["tickets"], use_container_width=True,
+        editado = st.data_editor(st.session_state["tickets"], width="stretch",
                                  num_rows="dynamic", key="tt_editor")
-        if st.button("Añadir al registro", type="primary", use_container_width=True):
+        if st.button("Añadir al registro", type="primary", width="stretch"):
             try:
                 destino = guardar(editado)
                 st.success(f"Añadidas {len(editado)} carrera(s) al registro ({destino}).")
@@ -758,7 +838,7 @@ def vista_analisis(perfil, nombres, oscuro):
                           hovertemplate="%{x}:00 · %{y:,.0f} viajes<extra></extra>")
         fig.update_yaxes(rangemode="tozero")
         st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=250),
-                        use_container_width=True, config={"displayModeBar": False})
+                        width="stretch", config={"displayModeBar": False})
     else:
         st.line_chart(por_hora)
 
@@ -773,10 +853,10 @@ def vista_analisis(perfil, nombres, oscuro):
         fig.update_traces(xgap=3, ygap=3,
                           hovertemplate="%{y} · %{x}:00 · %{z:,.0f}<extra></extra>")
         fig.update_coloraxes(showscale=False)
-        st.plotly_chart(estilo_grafico(fig, oscuro, alto=300), use_container_width=True,
+        st.plotly_chart(estilo_grafico(fig, oscuro, alto=300), width="stretch",
                         config={"displayModeBar": False})
     else:
-        st.dataframe(piv, use_container_width=True)
+        st.dataframe(piv, width="stretch")
 
     # --- Transferencia NYC (sin cambios de lógica) ---
     if NYC_PARQUET.exists():
@@ -794,7 +874,7 @@ def vista_analisis(perfil, nombres, oscuro):
             fig.update_layout(showlegend=True,
                               legend=dict(orientation="h", y=1.15, x=0, title_text=""))
             st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=240),
-                            use_container_width=True, config={"displayModeBar": False})
+                            width="stretch", config={"displayModeBar": False})
         else:
             st.line_chart(comp)
         tarjetas_metrica([("trend", f"r = {r:.3f}", "Correlación horaria"),
@@ -812,12 +892,16 @@ def vista_analisis(perfil, nombres, oscuro):
                 fig.update_traces(marker_color=ROJO, marker_line_width=0,
                                   hovertemplate="%{x}:00 · %{y:,.2f} €<extra></extra>")
                 st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=230),
-                                use_container_width=True, config={"displayModeBar": False})
+                                width="stretch", config={"displayModeBar": False})
             else:
                 st.bar_chart(ingresos)
 
 
 # =============================== Página ===============================
+def _ir_a(destino: str):
+    st.session_state["tt_vista"] = destino
+
+
 def main():
     oscuro = tema_oscuro()
     inyectar_css(oscuro)
@@ -840,9 +924,13 @@ def main():
         vista_analisis(perfil, nombres, oscuro)
 
     # Navegación inferior fija. Se dibuja al final para que el estado ya esté leído arriba.
+    # Con botones en lugar de segmented_control: éste no llegaba a ocupar el ancho y
+    # recortaba las etiquetas ("Condu..."), y no admite el icono sobre el texto.
     with st.container(key="tt_nav"):
-        st.segmented_control("Vista", VISTAS, default="Conductor",
-                             label_visibility="collapsed", key="tt_vista")
+        for col, (nombre, icono) in zip(st.columns(len(NAV)), NAV):
+            col.button(f":material/{icono}: {nombre}", key=f"tt_nav_{nombre}",
+                       width="stretch", on_click=_ir_a, args=(nombre,),
+                       type="primary" if nombre == vista else "tertiary")
 
 
 if __name__ == "__main__":

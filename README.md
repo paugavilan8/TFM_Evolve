@@ -32,7 +32,10 @@ pipeline/                    Fases 1-2: de datos crudos a modelos evaluados
   fase1_descarga_demanda.py    Descarga TLC + agrega a (zona × fecha × hora) con DuckDB
   fase2_features_baseline.py   Feature engineering (lags, calendario) + baseline ingenuo
   fase2_modelos.py             Baseline vs LightGBM vs Prophet
-  fase2_lstm.py                Baseline vs LightGBM vs LSTM
+  fase2_lstm.py                Baseline vs LightGBM vs LSTM (requiere Python 3.12)
+  fase2_entrenar_final.py      Entrena el modelo de producción y lo serializa
+  figuras_memoria.py           Genera todas las figuras de la memoria
+  modelo.py                    Carga del modelo guardado e inferencia
 
 notebooks/                   Análisis narrado
   fase1b_eda.ipynb             Exploratorio de la demanda NYC
@@ -43,8 +46,9 @@ scripts/                     Utilidades de un solo uso
   geocodificar_paradas.py      Geocodificación de paradas con Nominatim
   escanear_tickets.py          Escáner suelto (duplica la vista Registrar de app.py)
 
+models/                      Modelo entrenado (formato nativo LightGBM) + metadatos
 results/                     Tablas de resultados para la memoria
-docs/                        Memoria del TFM (pendiente)
+docs/                        Memoria del TFM, figuras y script que la construye
 ```
 
 ### Datos
@@ -62,17 +66,53 @@ data/registro/   Registro_carreras_TFM.xlsx, carreras reales            — igno
 proyecto están ancladas al fichero que las usa, así que cualquier script o notebook
 funciona desde cualquier directorio.
 
+## Entorno: por qué Python 3.12
+
+El proyecto se desarrolló sobre Python 3.14, pero **TensorFlow no publica
+distribuciones para esa versión**, de modo que el experimento con LSTM no podía
+ejecutarse. Todas las demás dependencias resuelven a versiones idénticas en 3.12 y en
+3.14, así que se fija **3.12** como versión del proyecto: un único entorno reproduce el
+pipeline completo, incluida la red recurrente.
+
+```bash
+uv python install 3.12
+uv venv .venv --python 3.12
+uv pip install -r requirements.txt -r requirements-pipeline.txt
+```
+
+Sin `uv` sirve igual `py -3.12 -m venv .venv` y luego `pip install -r ...`, siempre que
+Python 3.12 esté instalado en el sistema.
+
 ## Reproducir
 
 ```bash
-python -m venv .venv && .venv\Scripts\activate
-python -m pip install -r requirements-pipeline.txt
-
 python pipeline/fase1_descarga_demanda.py      # descarga ~620 MB y agrega (tarda)
 python pipeline/fase2_features_baseline.py     # features + baseline
 python pipeline/fase2_modelos.py               # LightGBM y Prophet
-python pipeline/fase2_lstm.py                  # LSTM (requiere tensorflow)
+python pipeline/fase2_lstm.py                  # LSTM
+python pipeline/fase2_entrenar_final.py        # modelo de producción -> models/
+python pipeline/figuras_memoria.py --lgbm      # figuras de la memoria
 ```
+
+## El modelo entrenado
+
+`pipeline/fase2_entrenar_final.py` guarda el modelo en `models/` en el formato nativo de
+LightGBM (`.txt`) en lugar de pickle: el fichero nativo no depende de la versión de
+Python ni de scikit-learn con que se creó, es texto plano inspeccionable y lo leen
+también los enlaces de LightGBM para R y C++. Junto a él se guarda un `.json` con las
+variables en orden, el mapeo de categorías de zona, los hiperparámetros, las métricas
+sobre el conjunto de prueba y las versiones de las librerías.
+
+Para predecir desde cualquier proceso:
+
+```python
+from pipeline.modelo import cargar, predecir
+booster, meta = cargar()
+y = predecir(booster, meta, df)      # df con las 14 variables del modelo
+```
+
+El script verifica la serialización comparando las predicciones del modelo en memoria
+con las del recargado: la diferencia debe ser exactamente cero.
 
 Para la app:
 
@@ -117,9 +157,9 @@ Se documentan aquí porque condicionan la lectura de los resultados:
 2. **La comparación con Prophet no es equitativa.** LightGBM recibe los lags y Prophet
    no recibe ningún regresor. Su peor resultado dice "Prophet sin regresores es peor",
    no "Prophet es peor".
-3. **El LSTM está implementado pero no ejecutado** (falta instalar TensorFlow), así que
-   `results/resultados_lstm.csv` todavía no existe. Además, tal y como está, la red no recibe
-   ningún identificador de zona ni normalización de variables.
+3. **El LSTM**: tal y como está implementado, la red no recibe ningún identificador de
+   zona ni normalización de variables, por lo que su resultado no debe leerse como el
+   techo de lo que una red recurrente puede dar en este problema.
 4. **Validación única.** Un solo corte temporal, sin validación cruzada de origen móvil
    ni intervalos de confianza.
 5. **Resolución espacial del prototipo.** La demanda local es por distrito (7) y las
