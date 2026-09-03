@@ -24,6 +24,8 @@ import html as _html
 import io
 import json
 import os
+import re
+import unicodedata
 from pathlib import Path
 
 import numpy as np
@@ -61,12 +63,28 @@ COLOR_OSCURO = {**COLOR, "Alta": "#E4715C"}
 def colores(oscuro: bool) -> dict:
     return COLOR_OSCURO if oscuro else COLOR
 
-# El geojson trae nombres genéricos ("Terrassa distrito 01"). Rellena esto con los
-# barrios reales y aparecerán en el chip del hero y en el mapa de calor.
+# El geojson trae nombres genéricos ("Terrassa distrito 01"). Aquí se traducen a los
+# nombres oficiales de los siete distritos de Terrassa, que es lo que aparece en el chip
+# del hero y en el mapa de calor. Se usa el nombre del distrito y no el de un barrio
+# concreto porque cada distrito agrupa varios (el 1 incluye Centre, Vallparadís, Antic
+# Poble de Sant Pere...), y nombrar solo uno sería incorrecto para el resto.
 ALIAS_DISTRITO = {
-    # "Terrassa distrito 01": "Centre",
-    # "Terrassa distrito 02": "Ca n'Aurell",
+    "Terrassa distrito 01": "Centre",
+    "Terrassa distrito 02": "Llevant",
+    "Terrassa distrito 03": "Sud",
+    "Terrassa distrito 04": "Ponent",
+    "Terrassa distrito 05": "Nord-oest",
+    "Terrassa distrito 06": "Nord-est",
+    "Terrassa distrito 07": "Sud-est",
 }
+
+# Un hueco mayor entre dos carreras no es circulación en vacío: es fin de turno,
+# comida o descanso. Se usa para no inflar la métrica del objetivo 1.2.
+TOPE_VACIO_MIN = 90
+# Umbral de similitud para emparejar el texto libre de un ticket con una parada.
+# Por debajo se considera que la carrera no empezó en ninguna parada conocida.
+UMBRAL_EMPAREJE = 0.5
+TOP_K = 3          # el sistema "acierta" si la parada real está entre las K primeras
 
 MODELO = "gemini-2.5-flash"
 COLUMNAS = ["fecha", "hora_recogida", "hora_fin", "zona_recogida", "zona_destino",
@@ -461,8 +479,14 @@ def leer_registro():
         df = df[df["Fecha"].notna()]
         if "Nº" in df.columns:
             df = df[df["Nº"].astype(str).str.upper() != "EJEMPLO"]
-        df = df.rename(columns={"Importe (€)": "importe_eur", "Distancia (km)": "distancia_km",
-                                "Fecha": "fecha", "Hora recogida": "hora_recogida"})
+        # Se renombran TODAS las columnas al nombre canónico que usa Google Sheets:
+        # si no, el análisis funcionaría con Sheets y no con el Excel local.
+        df = df.rename(columns={"Fecha": "fecha", "Hora recogida": "hora_recogida",
+                                "Hora fin": "hora_fin", "Zona recogida": "zona_recogida",
+                                "Zona destino": "zona_destino",
+                                "Distancia (km)": "distancia_km", "Importe (€)": "importe_eur",
+                                "Origen del servicio": "origen_servicio",
+                                "Min. en vacío antes": "vacio_declarado"})
         return df if len(df) else None
     except Exception:
         return None
@@ -540,6 +564,182 @@ def clima_actual():
         return None
 
 
+# =============================== Ranking de paradas ===============================
+@st.cache_data(show_spinner=False)
+def paradas_con_distrito(_paradas, _geo):
+    """Asigna a cada parada su distrito una sola vez.
+
+    El punto-en-polígono se recalculaba en cada rerun para las catorce paradas; y la
+    evaluación del recomendador lo necesitaría además para cada carrera registrada.
+    """
+    filas = []
+    if _paradas is None or _geo is None:
+        return filas
+    for _, p in _paradas.iterrows():
+        if pd.isna(p["lat"]) or pd.isna(p["lon"]):
+            continue
+        filas.append({"nombre": p["nombre"], "lat": float(p["lat"]), "lon": float(p["lon"]),
+                      "plazas": float(p.get("plazas") or 0),
+                      "direccion": str(p.get("direccion") or ""),
+                      "distrito_id": distrito_de(p["lon"], p["lat"], _geo)})
+    return filas
+
+
+def calcular_items(perfil, paradas_dist, nombres, dia, hora, evento=None):
+    """Ranking de paradas para un (día, hora).
+
+    Es la ÚNICA fuente del orden: la usan la vista Conductor y también la evaluación
+    del apartado "¿Acierta el sistema?". Si cada una calculase el suyo, la evaluación
+    estaría midiendo un sistema distinto del que ve la conductora.
+    """
+    dem = demanda_distritos(perfil, dia, hora)
+    vmax = float(dem.max()) if len(dem) else 0.0
+    medias = perfil[perfil["dow"] == dia].groupby("id_str")["viajes"].mean()
+
+    items = []
+    for p in paradas_dist:
+        did = p["distrito_id"]
+        nom_d = nombres.get(did, "")
+        items.append(dict(p,
+                          valor=float(dem.get(did, 0)) if did else 0.0,
+                          media_dia=float(medias.get(did, 0)) if did else 0.0,
+                          distrito=ALIAS_DISTRITO.get(nom_d, nom_d)))
+
+    if evento:
+        for it in items:
+            if it["nombre"] == evento:
+                it["valor"] = vmax * 2 + 1
+
+    # El nivel se calcula sobre el conjunto ya completo (incluido el evento), para que
+    # mapa, leyenda y ranking usen exactamente la misma escala.
+    mapa_niveles = niveles_por_tercil([it["valor"] for it in items])
+    for it in items:
+        it["nivel"] = mapa_niveles[it["valor"]]
+
+    # La demanda es por distrito, así que varias paradas comparten valor. Deshacemos el
+    # empate por número de plazas en lugar de dejarlo al orden del CSV.
+    items.sort(key=lambda d: (d["valor"], d.get("plazas", 0)), reverse=True)
+    return items
+
+
+# =============================== Registro: derivadas ===============================
+def _sin_acentos(s) -> str:
+    s = unicodedata.normalize("NFKD", str(s).lower())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r"[^a-z0-9 ]", " ", s)
+
+
+def _a_fecha(serie):
+    """Las fechas llegan en ISO desde el escáner y en formato local desde el Excel.
+
+    Se prueba ISO primero a propósito: con dayfirst=True, "2026-06-01" se interpreta
+    como el 6 de enero, lo que desplazaría en silencio el día de la semana de todas
+    las carreras de los primeros doce días de cada mes.
+    """
+    try:
+        s = pd.to_datetime(serie, errors="coerce", format="ISO8601")
+    except (ValueError, TypeError):
+        s = pd.to_datetime(serie, errors="coerce")
+    faltan = s.isna()
+    if faltan.any():
+        s = s.where(~faltan,
+                    pd.to_datetime(serie.where(faltan), errors="coerce", dayfirst=True))
+    return s
+
+
+def _a_hora(serie):
+    """Acepta '14:21', '14:21:00' y objetos time; devuelve datetime con la hora."""
+    s = serie.astype(str).str.strip().str.slice(0, 5)
+    return pd.to_datetime(s, format="%H:%M", errors="coerce")
+
+
+def preparar_registro(reg):
+    """Normaliza el registro y deriva duración de la carrera y hueco entre carreras.
+
+    El hueco entre el final de una carrera y el inicio de la siguiente es la medida
+    directa del objetivo del trabajo: el tiempo circulando sin pasaje.
+    """
+    d = reg.copy()
+    d["fecha"] = _a_fecha(d.get("fecha"))
+    for c in ("importe_eur", "distancia_km"):
+        d[c] = pd.to_numeric(d.get(c), errors="coerce") if c in d else np.nan
+
+    h_ini, h_fin = _a_hora(d.get("hora_recogida", pd.Series(dtype=str))), None
+    if "hora_fin" in d:
+        h_fin = _a_hora(d["hora_fin"])
+
+    def _combinar(h):
+        if h is None:
+            return pd.Series(pd.NaT, index=d.index)
+        return d["fecha"] + pd.to_timedelta(h.dt.hour, unit="h") \
+                          + pd.to_timedelta(h.dt.minute, unit="m")
+
+    d["t_ini"] = _combinar(h_ini)
+    d["t_fin"] = _combinar(h_fin)
+    d["hora"] = h_ini.dt.hour
+    # dayofweek de pandas es 0=lunes; el perfil del MITMA usa 1=lunes..7=domingo.
+    d["dow"] = d["fecha"].dt.dayofweek + 1
+
+    d = d.dropna(subset=["t_ini"]).sort_values("t_ini").reset_index(drop=True)
+    if not len(d):
+        return d
+
+    dur = (d["t_fin"] - d["t_ini"]).dt.total_seconds() / 60
+    dur = dur.where(dur >= 0, dur + 24 * 60)      # carrera que cruza medianoche
+    d["dur_min"] = dur
+
+    hueco = (d["t_ini"] - d["t_fin"].shift(1)).dt.total_seconds() / 60
+    mismo_dia = d["fecha"].eq(d["fecha"].shift(1))
+    d["hueco_min"] = hueco.where(mismo_dia & hueco.between(0, TOPE_VACIO_MIN))
+    return d
+
+
+def horas_de_turno(d) -> float:
+    """Horas comprometidas: de la primera recogida al último final, por día."""
+    if not len(d) or d["t_fin"].isna().all():
+        return 0.0
+    por_dia = d.groupby(d["fecha"].dt.date).agg(ini=("t_ini", "min"), fin=("t_fin", "max"))
+    span = (por_dia["fin"] - por_dia["ini"]).dt.total_seconds() / 3600
+    return float(span.clip(lower=0).sum())
+
+
+def emparejar_parada(texto, referencias):
+    """Empareja el texto libre de un ticket con una parada, o None si no se parece.
+
+    Los tickets traen la dirección de recogida en texto libre ("RESTAURANTE X
+    (Avinguda Y 38)"), no el nombre de una parada, así que hace falta un emparejado
+    aproximado. Las carreras no emparejadas se excluyen y se reportan.
+    """
+    t = _sin_acentos(texto)
+    if not t.strip():
+        return None
+    pal = {w for w in t.split() if len(w) >= 4 and not w.isdigit()}
+    num = {w for w in t.split() if w.isdigit()}
+
+    mejor, mejor_p = None, 0.0
+    for nombre, ref in referencias:
+        partes = ref.split()
+        rp = {w for w in partes if len(w) >= 4 and not w.isdigit()}
+        rn = {w for w in partes if w.isdigit()}
+
+        comunes = pal & rp
+        if not comunes:
+            p = 0.0
+        else:
+            # Cobertura sobre el conjunto menor: un ticket escueto no debe salir
+            # penalizado sólo porque la dirección de referencia sea larga.
+            p = len(comunes) / max(1, min(len(pal), len(rp)))
+            if len(comunes) < 2:
+                p *= 0.5        # una sola palabra en común es un indicio débil
+        # El número de portal es lo único que separa dos paradas de la misma calle
+        # (Rambla d Egara 132 es la del FGC; la 390, la del CAP).
+        if num and rn:
+            p += 0.35 if (num & rn) else -0.25
+        if p > mejor_p:
+            mejor, mejor_p = nombre, p
+    return mejor if mejor_p >= UMBRAL_EMPAREJE else None
+
+
 # =============================== Piezas de interfaz ===============================
 def encabezado(icono: str, texto: str):
     st.markdown(f'<div class="tt-h">{ICONO[icono]}<span>{esc(texto)}</span></div>',
@@ -550,7 +750,8 @@ def hero(top, dia, hora, distrito, indice):
     chips = [f"Demanda {top['nivel'].lower()}"]
     if distrito:
         chips.append(distrito)
-    chips.append(f"Índice {indice}")
+    if indice:
+        chips.append(f"{indice} % de su media")
     chips_html = "".join(f'<span class="tt-chip">{esc(c)}</span>' for c in chips)
     st.markdown(
         f'<div class="tt-hero">'
@@ -680,40 +881,15 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
     festivo = es_festivo(fecha)
     dia_efectivo = 7 if festivo else dia   # un festivo se comporta como un domingo
 
-    dem = demanda_distritos(perfil, dia_efectivo, hora)
-    vmax = float(dem.max()) if len(dem) else 0.0
-
-    items = []
-    if paradas is not None and geo is not None:
-        for _, p in paradas.iterrows():
-            if pd.isna(p["lat"]) or pd.isna(p["lon"]):
-                continue
-            did = distrito_de(p["lon"], p["lat"], geo)
-            v = float(dem.get(did, 0)) if did else 0.0
-            nom_d = nombres.get(did, "")
-            items.append({"nombre": p["nombre"], "lat": float(p["lat"]), "lon": float(p["lon"]),
-                          "valor": v,
-                          "distrito": ALIAS_DISTRITO.get(nom_d, nom_d),
-                          "plazas": float(p.get("plazas") or 0)})
-
-    if items:
+    paradas_dist = paradas_con_distrito(paradas, geo)
+    evento = None
+    if paradas_dist:
         with st.expander("¿Hay algún evento hoy? (opcional)"):
             ev = st.selectbox("Parada cercana al evento",
-                              ["(ninguno)"] + [it["nombre"] for it in items])
-            if ev != "(ninguno)":
-                for it in items:
-                    if it["nombre"] == ev:
-                        it["valor"] = vmax * 2 + 1
+                              ["(ninguno)"] + [p["nombre"] for p in paradas_dist])
+            evento = None if ev == "(ninguno)" else ev
 
-    # El nivel se calcula al final, sobre el conjunto ya completo (incluido el posible
-    # evento), para que mapa, leyenda y ranking usen exactamente la misma escala.
-    mapa_niveles = niveles_por_tercil([it["valor"] for it in items])
-    for it in items:
-        it["nivel"] = mapa_niveles[it["valor"]]
-
-    # La demanda es por distrito, así que varias paradas comparten valor. Deshacemos
-    # el empate por número de plazas en lugar de dejarlo al orden del CSV.
-    items.sort(key=lambda d: (d["valor"], d.get("plazas", 0)), reverse=True)
+    items = calcular_items(perfil, paradas_dist, nombres, dia_efectivo, hora, evento)
 
     if not items:
         st.info("Aún no tengo las paradas (`paradas_terrassa.csv`) "
@@ -721,9 +897,13 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
         return
 
     top = items[0]
-    tope = max((i["valor"] for i in items), default=0) or 1
+    # Antes se mostraba valor/máximo, que para la parada recomendada vale siempre 100:
+    # era una tautología. Ahora se compara con la media diaria de esa misma parada, que
+    # sí informa de si el momento es bueno o flojo para ella.
+    media = top.get("media_dia") or 0
+    indice = round(100 * top["valor"] / media) if media else None
     with hueco_hero:
-        hero(top, dia, hora, top.get("distrito"), round(100 * top["valor"] / tope))
+        hero(top, dia, hora, top.get("distrito"), indice)
 
     if festivo:
         st.info("Hoy es festivo: uso el patrón de demanda de un domingo.")
@@ -793,7 +973,7 @@ def vista_registrar():
                 st.error(f"No pude guardar: {e}")
 
 
-def vista_analisis(perfil, nombres, oscuro):
+def vista_analisis(perfil, geo, nombres, paradas, oscuro):
     try:
         import plotly.express as px
         tiene_px = True
@@ -806,12 +986,16 @@ def vista_analisis(perfil, nombres, oscuro):
 
     # --- Rentabilidad real, arriba porque es lo que el conductor mira primero ---
     reg = leer_registro()
+    detalle = None
     if reg is None or len(reg) == 0:
         tarjetas_metrica([("route", "—", "Carreras"), ("euro", "—", "Ingresos"),
                           ("gauge", "—", "€/km")])
+        tarjetas_metrica([("clock", "—", "€/hora"), ("bolt", "—", "Min. en vacío"),
+                          ("route", "—", "Min. por carrera")])
         st.info("Aún no hay carreras registradas. Aparecerán aquí en cuanto subas tickets.")
         imp = None
     else:
+        detalle = preparar_registro(reg)
         imp = pd.to_numeric(reg.get("importe_eur"), errors="coerce")
         km = pd.to_numeric(reg.get("distancia_km"), errors="coerce")
         total, tot_km = imp.sum(), km.sum()
@@ -819,6 +1003,20 @@ def vista_analisis(perfil, nombres, oscuro):
         tarjetas_metrica([("route", int(imp.notna().sum()), "Carreras"),
                           ("euro", f"{total:,.0f} €".replace(",", "."), "Ingresos"),
                           ("gauge", eur_km, "€/km")])
+
+        # €/km premia las carreras largas y lentas; lo que un taxista optimiza es el
+        # euro por hora de turno. Y los minutos en vacío son el objetivo declarado
+        # del trabajo, así que van en portada.
+        horas = horas_de_turno(detalle) if len(detalle) else 0.0
+        ing = float(detalle["importe_eur"].sum()) if len(detalle) else 0.0
+        eur_h = f"{ing / horas:.2f}" if horas > 0 else "—"
+        vac = detalle["hueco_min"].dropna() if len(detalle) else pd.Series(dtype=float)
+        dur = detalle["dur_min"].dropna() if len(detalle) else pd.Series(dtype=float)
+        tarjetas_metrica([
+            ("clock", eur_h, "€/hora de turno"),
+            ("bolt", f"{vac.median():.0f}" if len(vac) else "—", "Min. en vacío (mediana)"),
+            ("route", f"{dur.median():.0f}" if len(dur) else "—", "Min. por carrera"),
+        ])
 
     # --- Selector de día ---
     dia = st.segmented_control("Día de la semana", list(DIAS),
@@ -896,6 +1094,99 @@ def vista_analisis(perfil, nombres, oscuro):
             else:
                 st.bar_chart(ingresos)
 
+    # --- Tiempo en vacío: el objetivo declarado del trabajo ---
+    if detalle is not None and len(detalle) and detalle["hueco_min"].notna().any():
+        encabezado("clock", "Tiempo en vacío")
+        st.markdown(
+            f'<div class="tt-sub">Minutos entre el final de una carrera y la siguiente. '
+            f'Los huecos de más de {TOPE_VACIO_MIN} minutos se descartan: son descanso o '
+            f'fin de turno, no circulación en vacío.</div>', unsafe_allow_html=True)
+        v = detalle.dropna(subset=["hueco_min"])
+        por_hora_v = v.groupby("hora")["hueco_min"].mean()
+        if tiene_px and len(por_hora_v):
+            fig = px.bar(x=por_hora_v.index, y=por_hora_v.values)
+            fig.update_traces(marker_color=ROJO, marker_line_width=0,
+                              hovertemplate="%{x}:00 · %{y:.0f} min<extra></extra>")
+            st.plotly_chart(estilo_grafico(fig, oscuro, sufijo_x="h", alto=220),
+                            width="stretch", config={"displayModeBar": False})
+        elif len(por_hora_v):
+            st.bar_chart(por_hora_v)
+
+        if "zona_destino" in v.columns:
+            por_destino = (v.groupby(v["zona_destino"].astype(str).str.slice(0, 34))
+                            ["hueco_min"].agg(["mean", "size"]))
+            por_destino = por_destino[por_destino["size"] >= 2].sort_values("mean")
+            if len(por_destino):
+                st.markdown('<div class="tt-sub">Dónde cuesta más volver a cargar tras '
+                            'dejar al cliente:</div>', unsafe_allow_html=True)
+                st.dataframe(por_destino.rename(columns={"mean": "Min. en vacío",
+                                                         "size": "Carreras"}).round(0),
+                             width="stretch")
+
+    # --- ¿Acierta el sistema? Evaluación del recomendador ---
+    encabezado("gauge", "¿Acierta el sistema?")
+    paradas_dist = paradas_con_distrito(paradas, geo)
+    if detalle is None or not len(detalle) or not paradas_dist \
+            or "zona_recogida" not in detalle.columns:
+        st.info("Con carreras registradas, aquí se compara dónde recogiste de verdad "
+                "con lo que el sistema recomendaba a esa hora.")
+    else:
+        refs = [(q["nombre"], _sin_acentos(q["nombre"] + " " + q["direccion"]))
+                for q in paradas_dist]
+        aciertos = emparejadas = 0
+        centro = None
+        for _, c in detalle.iterrows():
+            if pd.isna(c.get("dow")) or pd.isna(c.get("hora")):
+                continue
+            real = emparejar_parada(c.get("zona_recogida"), refs)
+            if real is None:
+                continue
+            emparejadas += 1
+            orden = calcular_items(perfil, paradas_dist, nombres,
+                                   int(c["dow"]), int(c["hora"]))
+            if real in [o["nombre"] for o in orden[:TOP_K]]:
+                aciertos += 1
+            if centro is None:
+                centro = orden[0]["nombre"]
+
+        if not emparejadas:
+            st.info("Ninguna de las carreras registradas ha podido emparejarse con una "
+                    "parada conocida: los tickets recogen direcciones de calle, no "
+                    "nombres de parada.")
+        else:
+            tasa = 100 * aciertos / emparejadas
+            azar = 100 * TOP_K / len(paradas_dist)
+            tarjetas_metrica([
+                ("gauge", f"{tasa:.0f} %", f"Acierto en top-{TOP_K}"),
+                ("grid", f"{azar:.0f} %", "Si fuese al azar"),
+                ("route", f"{emparejadas}/{len(detalle)}", "Carreras emparejadas"),
+            ])
+            if tasa > azar:
+                st.success(f"El sistema supera al azar: {tasa:.0f} % frente a "
+                           f"{azar:.0f} %.")
+            else:
+                st.warning(f"El sistema no supera al azar ({tasa:.0f} % frente a "
+                           f"{azar:.0f} %). Con pocas carreras el dato aún no es "
+                           "concluyente.")
+            st.caption(f"Se considera acierto que la parada donde empezó la carrera "
+                       f"estuviese entre las {TOP_K} primeras del ranking a esa hora y "
+                       f"ese día de la semana. Las carreras que no se pueden emparejar "
+                       f"con una parada se excluyen del cálculo.")
+
+    # --- Flujos origen-destino de las carreras reales ---
+    if detalle is not None and len(detalle) and "zona_destino" in detalle.columns:
+        flu = detalle.dropna(subset=["zona_recogida", "zona_destino"])
+        if len(flu):
+            encabezado("route", "De dónde a dónde")
+            tabla_flu = (flu.assign(
+                            Origen=flu["zona_recogida"].astype(str).str.slice(0, 30),
+                            Destino=flu["zona_destino"].astype(str).str.slice(0, 30))
+                         .groupby(["Origen", "Destino"])
+                         .agg(Carreras=("importe_eur", "size"),
+                              Importe=("importe_eur", "mean"))
+                         .sort_values("Carreras", ascending=False).head(15).round(2))
+            st.dataframe(tabla_flu, width="stretch")
+
 
 # =============================== Página ===============================
 def _ir_a(destino: str):
@@ -921,7 +1212,7 @@ def main():
     elif vista == "Registrar":
         vista_registrar()
     else:
-        vista_analisis(perfil, nombres, oscuro)
+        vista_analisis(perfil, geo, nombres, paradas, oscuro)
 
     # Navegación inferior fija. Se dibuja al final para que el estado ya esté leído arriba.
     # Con botones en lugar de segmented_control: éste no llegaba a ocupar el ancho y
