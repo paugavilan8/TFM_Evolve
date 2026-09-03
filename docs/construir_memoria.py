@@ -50,13 +50,13 @@ def indice(doc, instruccion, marcador):
     return p
 
 
-def figura(doc, archivo, pie):
+def figura(doc, archivo, pie, ancho=None):
     """Imagen centrada + pie 'Figura N. ...' con numeración automática (campo SEQ)."""
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     p.paragraph_format.keep_with_next = True     # el pie nunca se separa de la imagen
     p.paragraph_format.space_before = Pt(10)
-    p.add_run().add_picture(str(FIG / archivo), width=ANCHO)
+    p.add_run().add_picture(str(FIG / archivo), width=ancho or ANCHO)
 
     c = doc.add_paragraph()
     c.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -156,7 +156,17 @@ H = doc.add_heading
 
 
 def li(texto):
-    doc.add_paragraph(texto, style="List Paragraph")
+    """Punto de lista con la viñeta de la plantilla.
+
+    El estilo 'List Paragraph' por sí solo no pinta viñeta: la lleva numbering.xml,
+    que el original enlaza con numId 2. Al reconstruir el cuerpo hay que volver a
+    enlazarlo o los puntos salen como párrafos sueltos.
+    """
+    p = doc.add_paragraph(texto, style="List Paragraph")
+    numPr = p._p.get_or_add_pPr().get_or_add_numPr()
+    numPr.get_or_add_ilvl().val = 0
+    numPr.get_or_add_numId().val = 2
+    return p
 
 
 # ----------------------------- Portada -----------------------------
@@ -292,9 +302,23 @@ P("La predicción de demanda de movilidad es un área activa de investigación. 
   "franja temporal, a partir de patrones históricos y de variables de contexto como el "
   "clima, los festivos o los eventos. Se trata de un problema de regresión con una fuerte "
   "componente estacional (diaria y semanal) y espacial.")
-P("El estado del arte abarca desde modelos clásicos de series temporales hasta enfoques de "
-  "aprendizaje profundo. [Ampliar con referencias bibliográficas concretas del estado del "
-  "arte]")
+P("El estado del arte abarca desde modelos clásicos de series temporales hasta enfoques "
+  "de aprendizaje profundo. En el extremo profundo, Zhang, Zheng y Qi (2017) proponen con "
+  "ST-ResNet una red residual convolucional que predice los flujos de entrada y salida de "
+  "personas por región urbana, y que se ha convertido en una referencia del área; sobre el "
+  "propio conjunto de Nueva York existen numerosos trabajos posteriores de predicción de "
+  "demanda de taxi y de vehículos de alquiler con conductor.")
+P("Sin embargo, la superioridad del aprendizaje profundo en este tipo de problemas dista "
+  "de estar asentada. Elsayed et al. (2021) comparan ocho modelos profundos del estado del "
+  "arte con un árbol de decisión potenciado por gradiente sobre nueve conjuntos de datos, "
+  "y concluyen que este último los supera a todos cuando la entrada se transforma mediante "
+  "ventanas temporales. En la misma línea, Grinsztajn, Oyallon y Varoquaux (2022) muestran "
+  "que los modelos basados en árboles siguen siendo el estado del arte sobre datos "
+  "tabulares de tamaño medio, y atribuyen la diferencia a dos sesgos inductivos: los "
+  "árboles aprenden mejor funciones objetivo irregulares y se ven menos perjudicados por "
+  "las variables poco informativas. Ambos resultados son directamente pertinentes aquí, "
+  "porque el problema que se aborda, una vez construidas las variables de retardo, es "
+  "tabular y de tamaño medio.")
 
 H("2.2    El conjunto de datos de Nueva York y la ausencia de datos locales", level=2)
 P("La Taxi and Limousine Commission de Nueva York (NYC TLC) publica de forma abierta los "
@@ -312,6 +336,13 @@ P("Cuando un modelo se entrena con datos de un contexto y se aplica a otro disti
   "distingue entre lo que se transfiere —la forma de los patrones temporales— y lo que "
   "debe recalibrarse —la escala y la geografía locales—, apoyándose en fuentes de "
   "movilidad locales para la recalibración.")
+P("El problema tiene nombre propio en la literatura: la transferencia entre ciudades "
+  "(cross-city transfer learning) se ha consolidado como respuesta a la escasez de datos "
+  "en la ciudad de destino, extrayendo conocimiento de ciudades con datos abundantes para "
+  "predecir en las que carecen de ellos. Es exactamente la situación de este trabajo, con "
+  "la diferencia de que aquí la transferencia no se plantea sobre los pesos de una red "
+  "neuronal sino sobre la forma agregada del patrón temporal: un enfoque más modesto, pero "
+  "verificable con las fuentes disponibles.")
 
 # ----------------------------- 3. Datos -----------------------------
 H("3    Datos", level=1)
@@ -337,8 +368,15 @@ P("Como aproximación a la demanda local se emplea el Estudio de la movilidad co
   "como proxy, una limitación que se documenta de forma explícita.")
 
 H("3.3    Variables externas", level=2)
-P("Se incorporan variables meteorológicas de la API de Open-Meteo y el calendario de "
-  "festivos, por su influencia conocida sobre la demanda de movilidad.")
+P("El calendario de festivos se incorpora como variable del modelo, por su influencia "
+  "conocida sobre la demanda de movilidad, y también condiciona la recomendación de la "
+  "aplicación, que trata un festivo con el patrón de un domingo.")
+P("Las condiciones meteorológicas se obtienen en tiempo real de la API de Open-Meteo, "
+  "pero conviene precisar su papel: se muestran al conductor como información de "
+  "contexto —un aviso cuando está lloviendo, situación en la que suele haber más "
+  "servicios— y no entran como variable en el modelo. Incorporarlas exigiría el "
+  "histórico meteorológico horario de Nueva York alineado con la rejilla de demanda, "
+  "que queda como línea futura.")
 
 H("3.4    Datos reales del taxista", level=2)
 P("La validación final y el caso de uso se apoyan en los datos reales de carreras de una "
@@ -546,12 +584,21 @@ tabla(doc, ["Hiperparámetro", "Valor", "Motivo"],
        ["colsample_bytree", "0,8", "Submuestreo de variables por árbol"],
        ["random_state", "42", "Reproducibilidad"]])
 pie_tabla(doc, "Hiperparámetros del modelo LightGBM de producción.")
-P("La familia LSTM quedó planteada pero su ejecución se pospone como trabajo futuro: la "
-  "versión de Python del entorno de desarrollo (3.14) es posterior a las versiones para "
-  "las que TensorFlow publica distribuciones, por lo que la librería no puede instalarse "
-  "sin construir un entorno paralelo. El código del experimento está escrito y versionado; "
-  "su ausencia no altera la conclusión principal del capítulo, dado que el modelo ganador "
-  "supera al baseline con un margen amplio.")
+P("La red recurrente se evalúa sobre una muestra de veinte zonas —las de mayor demanda—, "
+  "tamaño al que resulta viable construir las secuencias deslizantes de 168 horas que "
+  "consume. Para que la comparación sea equitativa, LightGBM se reentrena sobre esas "
+  "mismas zonas y el baseline se recalcula sobre las mismas filas. La tabla 4 recoge el "
+  "resultado.")
+tabla(doc, ["Modelo", "MAE", "RMSE", "WAPE"],
+      [["Baseline (muestra de 20 zonas)", "36,30", "60,35", "24,8 %"],
+       ["LightGBM (muestra de 20 zonas)", "18,85", "28,95", "12,9 %"],
+       ["LSTM (muestra de 20 zonas)", "23,07", "35,33", "15,7 %"]])
+pie_tabla(doc, "Comparación sobre la muestra de las 20 zonas de mayor demanda, escala a la "
+               "que es viable entrenar la red recurrente.")
+P("Este experimento exige un entorno con Python 3.12: TensorFlow no publica "
+  "distribuciones para la versión 3.14 empleada inicialmente en el desarrollo, mientras "
+  "que el resto de dependencias del proyecto resuelve a versiones idénticas en ambas. Se "
+  "comprobó que la migración no altera ninguna de las métricas anteriores.")
 
 H("5.7    Discusión de resultados", level=2)
 P("LightGBM es el ganador con claridad: reduce el WAPE del 28,5 % del baseline al 16,5 %, "
@@ -567,6 +614,15 @@ P("Un resultado igualmente informativo es que Prophet no supera siquiera al base
   "información de entrada; lo que demuestra es que, para este problema, la capacidad de "
   "explotar retardos y relaciones entre zonas pesa más que el modelado explícito de la "
   "estacionalidad. Ese hallazgo es precisamente lo que justifica la elección de LightGBM "
+  "como modelo de producción.")
+P("La red recurrente supera con holgura al baseline (15,7 % frente a 24,8 %) pero no "
+  "alcanza a LightGBM (12,9 %). Conviene precisar que esa cifra debe leerse como un suelo "
+  "y no como un techo: la red recibe las mismas variables por paso temporal para todas "
+  "las zonas, sin ningún identificador de zona ni representación embebida que le permita "
+  "distinguirlas, y sin normalizar las entradas. Una arquitectura que incorporase ambas "
+  "cosas partiría en mejores condiciones. Aun así el resultado es informativo: a un coste "
+  "de entrenamiento muy superior —minutos frente a segundos— la red no aporta ventaja "
+  "sobre el gradient boosting en este problema, lo que refuerza la elección de LightGBM "
   "como modelo de producción.")
 P("El análisis de importancia de variables confirma esta lectura y añade un matiz. La "
   "variable con mayor número de divisiones es la zona, seguida de la hora del día y del "
@@ -705,6 +761,15 @@ for f in [
     "rentabilidad real del conductor, leída en directo del registro de carreras.",
 ]:
     li(f)
+P("El modo Análisis incorpora además tres bloques que explotan el registro real de "
+  "carreras. El primero son las métricas de rentabilidad: además de los euros por "
+  "kilómetro se calcula el euro por hora de turno, que es la magnitud que un conductor "
+  "optimiza en la práctica —el euro por kilómetro premia las carreras largas y lentas—. "
+  "El segundo es el tiempo en vacío, medido como el hueco entre el final de una carrera "
+  "y el inicio de la siguiente, descartando los huecos superiores a noventa minutos, que "
+  "corresponden a descansos o a fin de turno y no a circulación sin pasaje; se desglosa "
+  "por hora del día y por zona de destino, lo que responde directamente al objetivo "
+  "planteado en el apartado 1.2. El tercero se describe a continuación.")
 P("Los niveles de demanda se asignan por terciles sobre los valores presentes en cada "
   "momento, y no mediante umbrales fijos. La razón es consecuencia directa de la "
   "limitación descrita en el apartado 6.5: con umbrales fijos sobre el máximo, ninguna "
@@ -713,7 +778,32 @@ P("Los niveles de demanda se asignan por terciles sobre los valores presentes en
   "distintos, de modo que dos paradas del mismo distrito reciben siempre la misma "
   "etiqueta.")
 
-H("7.5    Captura de datos por fotografía", level=2)
+H("7.5    Evaluación del recomendador", level=2)
+P("Un sistema que recomienda debe poder decir si acierta. La aplicación incorpora esa "
+  "evaluación de forma continua, aprovechando que el propio registro de carreras "
+  "proporciona la verdad de campo: para cada carrera realizada se reconstruye el ranking "
+  "que el sistema habría mostrado ese día y a esa hora, y se comprueba si la parada donde "
+  "la conductora recogió efectivamente figuraba entre las tres primeras.")
+P("La métrica es la tasa de acierto en las k primeras posiciones, habitual en la "
+  "evaluación de sistemas de recomendación, y se contrasta con la referencia del azar: "
+  "con catorce paradas y k igual a tres, un sistema que recomendase aleatoriamente "
+  "acertaría el 21 % de las veces. Superar ese umbral es la condición mínima para "
+  "afirmar que la recomendación aporta información.")
+P("Dos precisiones metodológicas. La primera es que el ranking usado en la evaluación se "
+  "calcula con la misma función que alimenta la vista del conductor: si cada una "
+  "calculase el suyo, la evaluación estaría midiendo un sistema distinto del que ve la "
+  "usuaria. La segunda es que los tickets registran la dirección de recogida en texto "
+  "libre y no el nombre de una parada, de modo que hace falta un emparejamiento "
+  "aproximado; las carreras que no pueden asociarse con seguridad a ninguna parada se "
+  "excluyen del cálculo y la proporción de carreras emparejadas se muestra junto a la "
+  "métrica, para que el lector pueda juzgar su cobertura.")
+P("En el momento de redactar esta memoria el volumen de carreras registradas es todavía "
+  "insuficiente para que el resultado sea concluyente. La instrumentación, sin embargo, "
+  "queda operativa y produce el dato de forma automática conforme el registro crece: es "
+  "la vía por la que este trabajo podrá pasar de un sistema construido a un sistema "
+  "evaluado.")
+
+H("7.6    Captura de datos por fotografía", level=2)
 P("Para minimizar la fricción del registro —principal riesgo para la continuidad de la "
   "recogida de datos— la aplicación incorpora un lector de tickets. La fotografía se "
   "procesa con un modelo de visión (Gemini), que devuelve los campos estructurados; el "
@@ -722,7 +812,7 @@ P("Para minimizar la fricción del registro —principal riesgo para la continui
   "retroalimentan de inmediato las métricas de rentabilidad del propio usuario. Las "
   "implicaciones de protección de datos de este componente se analizan en el apartado 3.5.")
 
-H("7.6    Despliegue", level=2)
+H("7.7    Despliegue", level=2)
 P("La aplicación se despliega en Streamlit Community Cloud y es accesible desde el "
   "navegador del teléfono, donde puede añadirse a la pantalla de inicio como una "
   "aplicación. El usuario no necesita instalar nada: completa un servicio, fotografía el "
@@ -757,8 +847,9 @@ for lim in [
     "(apartado 5.3).",
     "La validación emplea un único corte temporal, sin validación cruzada de origen móvil "
     "ni intervalos de confianza (apartado 5.4).",
-    "La comparativa queda incompleta: el LSTM está implementado pero no ejecutado por "
-    "incompatibilidad de versiones del entorno (apartado 5.6).",
+    "El LSTM se ha entrenado sin identificador de zona ni normalización de entradas, de "
+    "modo que su resultado marca un suelo y no el techo de lo que una red recurrente "
+    "puede dar en este problema (apartado 5.7).",
     "El modelo entrenado no alimenta todavía la recomendación del producto (apartado 7.3).",
     "El volumen de datos reales del taxista es aún reducido y está en proceso de "
     "acumulación, por lo que no ha sido posible una validación local del sistema.",
@@ -779,15 +870,18 @@ for lf in [
     "forma uniforme el valor del distrito.",
     "Evaluar el modelo a veinticuatro horas vista, sin la variable de retardo de una hora, "
     "para caracterizar su rendimiento a horizontes largos.",
-    "Completar la comparativa con el modelo LSTM en un entorno con una versión de Python "
-    "compatible con TensorFlow.",
+    "Mejorar la arquitectura de la red recurrente incorporando una representación "
+    "embebida de la zona y la normalización de las variables de entrada, para determinar "
+    "si con ello alcanza o supera al gradient boosting.",
     "Incorporar un esquema de validación cruzada de origen móvil que permita acompañar las "
     "métricas de intervalos de confianza.",
     "Sustituir el reconocimiento de tickets en la nube por un reconocimiento óptico local, "
     "eliminando la transferencia de datos a un tercero.",
-    "Incorporar funciones de personalización («tus mejores horas y zonas») y un mecanismo "
-    "de retorno del usuario sobre el acierto de las recomendaciones, que permitiría medir "
-    "por primera vez la calidad del recomendador.",
+    "Acumular carreras suficientes para que la tasa de acierto del apartado 7.5 sea "
+    "estadísticamente concluyente, y contrastarla además con la estrategia que la "
+    "conductora sigue hoy por intuición.",
+    "Incorporar el histórico meteorológico horario como variable del modelo, hoy "
+    "utilizado solo como información de contexto (apartado 3.3).",
     "Escalar el sistema de un autónomo a cooperativas o pequeñas flotas, y evolucionar la "
     "interfaz hacia una aplicación nativa.",
 ]:
@@ -795,18 +889,75 @@ for lf in [
 
 # ----------------------------- 9. Bibliografía -----------------------------
 H("9    Bibliografía", level=1)
+
+H("9.1    Fuentes de datos", level=2)
 for b in [
-    "NYC Taxi and Limousine Commission. TLC Trip Record Data. Disponible en el portal de "
-    "datos abiertos de la ciudad de Nueva York.",
-    "Ministerio de Transportes y Movilidad Sostenible. Estudio de la movilidad con Big "
-    "Data. Open Data Movilidad.",
-    "Open-Meteo. Free Weather API.",
-    "Kotov, E. et al. spanishoddata: A package for accessing Spanish Open Mobility Big "
-    "Data.",
-    "[Añadir referencias del estado del arte y de la metodología (modelos de predicción de "
-    "demanda, gradient boosting, etc.)]",
+    "New York City Taxi and Limousine Commission (2024). TLC Trip Record Data. Registros "
+    "de viajes de Yellow Taxi. "
+    "https://www.nyc.gov/site/tlc/about/tlc-trip-record-data.page",
+    "Ministerio de Transportes y Movilidad Sostenible (2024). Estudio de la movilidad con "
+    "Big Data: matrices origen-destino a partir de datos anonimizados de telefonía móvil. "
+    "Portal de descarga: https://opendata-movilidad.mitma.es",
+    "Open-Meteo (2024). Free Weather API. Datos meteorológicos horarios. "
+    "https://open-meteo.com",
+    "OpenStreetMap contributors (2024). Datos geográficos de las paradas de taxi de "
+    "Terrassa, obtenidos con la API Overpass y geocodificados con Nominatim. "
+    "https://www.openstreetmap.org y https://nominatim.org",
+    "Ajuntament de Terrassa (2024). Servei de taxi. Relación de paradas del municipio. "
+    "https://www.terrassa.cat/taxis [completar con el título y la URL exactos del "
+    "documento descargado]",
+    "Elaboración propia (2026). Registro de carreras reales de una taxista autónoma de "
+    "Terrassa (cooperativa Tele-Taxi Egara), recogido con consentimiento informado "
+    "mediante la aplicación desarrollada en este trabajo. Datos no publicados.",
 ]:
     P(b)
+
+H("9.2    Herramientas y tecnologías", level=2)
+for b in [
+    "Ke, G., Meng, Q., Finley, T., Wang, T., Chen, W., Ma, W., Ye, Q. y Liu, T.-Y. (2017). "
+    "LightGBM: A Highly Efficient Gradient Boosting Decision Tree. Advances in Neural "
+    "Information Processing Systems, 30. "
+    "https://proceedings.neurips.cc/paper/6907-lightgbm-a-highly-efficient-gradient-"
+    "boosting-decision-tree.pdf",
+    "Taylor, S. J. y Letham, B. (2018). Forecasting at Scale. The American Statistician, "
+    "72(1), 37-45. https://doi.org/10.1080/00031305.2017.1380080",
+    "Raasveldt, M. y Mühleisen, H. (2019). DuckDB: an Embeddable Analytical Database. "
+    "Proceedings of the 2019 International Conference on Management of Data (SIGMOD 19), "
+    "1981-1984. https://doi.org/10.1145/3299869.3320212",
+    "Kotov, E., Vidal-Tortosa, E., Cantú-Ros, O. G., Burrieza-Galán, J., Herranz, R., "
+    "Gullón Muñoz-Repiso, T. y Lovelace, R. (2026). spanishoddata: A package for accessing "
+    "and working with Spanish Open Mobility Big Data. Environment and Planning B: Urban "
+    "Analytics and City Science. https://doi.org/10.1177/23998083251415040",
+    "Abadi, M. et al. (2015). TensorFlow: Large-Scale Machine Learning on Heterogeneous "
+    "Systems. https://www.tensorflow.org",
+    "Pedregosa, F. et al. (2011). Scikit-learn: Machine Learning in Python. Journal of "
+    "Machine Learning Research, 12, 2825-2830. https://scikit-learn.org",
+    "McKinney, W. (2010). Data Structures for Statistical Computing in Python. Proceedings "
+    "of the 9th Python in Science Conference, 56-61. https://pandas.pydata.org",
+    "Streamlit Inc. (2024). Streamlit: A faster way to build and share data apps. "
+    "https://docs.streamlit.io",
+    "Folium contributors (2024). Folium: Python Data, Leaflet.js Maps. "
+    "https://python-visualization.github.io/folium y https://leafletjs.com",
+    "Google (2025). Gemini API: modelos generativos multimodales. https://ai.google.dev",
+]:
+    P(b)
+
+H("9.3    Referencias académicas", level=2)
+for b in [
+    "Zhang, J., Zheng, Y. y Qi, D. (2017). Deep Spatio-Temporal Residual Networks for "
+    "Citywide Crowd Flows Prediction. Proceedings of the AAAI Conference on Artificial "
+    "Intelligence, 31(1). https://ojs.aaai.org/index.php/AAAI/article/view/10735",
+    "Elsayed, S., Thyssens, D., Rashed, A., Schmidt-Thieme, L. y Jomaa, H. S. (2021). Do "
+    "We Really Need Deep Learning Models for Time Series Forecasting? arXiv:2101.02118. "
+    "https://arxiv.org/abs/2101.02118",
+    "Grinsztajn, L., Oyallon, E. y Varoquaux, G. (2022). Why do tree-based models still "
+    "outperform deep learning on typical tabular data? Advances in Neural Information "
+    "Processing Systems, 35. https://proceedings.neurips.cc/paper_files/paper/2022/file/"
+    "0378c7692da36807bdec87ab043cdadc-Paper-Datasets_and_Benchmarks.pdf",
+]:
+    P(b)
+P("[Ampliar con las referencias adicionales que se consulten sobre predicción de demanda "
+  "de taxi y sobre transferencia de modelos entre ciudades.]")
 
 # ----------------------------- 10. Anexos -----------------------------
 salto(doc)
@@ -863,9 +1014,20 @@ P("La hoja de instrucciones incluye la regla de oro entregada a la participante:
   "para preservar el valor del dato original.")
 
 H("10.3    Anexo C — Capturas de la aplicación", level=2)
-P("[Insertar aquí las capturas de los tres modos de la aplicación: Conductor con el mapa "
-  "y el ranking de paradas, Registrar con el lector de tickets, y Análisis con las "
-  "métricas de rentabilidad y la comparación de la transferencia.]")
+P("Las capturas siguientes corresponden a la aplicación en funcionamiento, tomadas desde "
+  "el navegador con el ancho de un teléfono, que es el formato de uso real.")
+figura(doc, "captura conductor.png",
+       "Modo Conductor: recomendación destacada, mapa de las catorce paradas por nivel de "
+       "demanda y ranking. La parada recomendada aparece resaltada también en la lista.",
+       ancho=Inches(4.0))
+figura(doc, "captura registrar.png",
+       "Modo Registrar: captura del ticket y revisión de los campos extraídos antes de "
+       "guardarlos en el registro.",
+       ancho=Inches(4.6))
+figura(doc, "captura analisis.png",
+       "Modo Análisis: rentabilidad real de la conductora, patrón de demanda por hora y "
+       "comparación de la transferencia entre Nueva York y Terrassa.",
+       ancho=Inches(4.0))
 
 H("10.4    Anexo D — Estructura del repositorio", level=2)
 P("El código del proyecto se organiza del siguiente modo:")
