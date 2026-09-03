@@ -24,3 +24,6 @@ matplotlib==3.11.0
 seaborn==0.13.2
 jupyterlab==4.5.9
 ipykernel==7.3.0
+
+# --- construcción de la memoria (docs/construir_memoria.py) ---
+python-docx==1.2.0

@@ -27,3 +27,6 @@ scratch/
 # Sistema
 .DS_Store
 Thumbs.db
+
+# Ficheros temporales de Word
+~$*
