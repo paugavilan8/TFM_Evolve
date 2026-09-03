@@ -93,7 +93,7 @@ lgbm.fit(X_train, train[TARGET], categorical_feature=["zona"])
 pred_lgbm = np.clip(lgbm.predict(X_test), 0, None)   # nunca demanda negativa
 resultados["LightGBM"] = metricas(test[TARGET], pred_lgbm)
 
-# Importancia de variables (útil para la memoria)
+# Importancia de variables
 imp = (pd.Series(lgbm.feature_importances_, index=FEATURES)
        .sort_values(ascending=False))
 print("\n   Importancia de variables (top 6):")
@@ -148,12 +148,10 @@ print("=" * 60)
 tabla_b = pd.DataFrame(res_muestra).T.round(3)
 print(tabla_b.to_string())
 
-# Guardar para la memoria
 out = pd.concat([tabla_a, tabla_b])
 out.to_csv(RESULTS_DIR / "resultados_comparativa.csv")
 print("\n→ Guardado: resultados_comparativa.csv")
 
-# Veredicto rápido
 mejora = (1 - tabla_a.loc["LightGBM", "WAPE_%"] / tabla_a.loc["Baseline", "WAPE_%"]) * 100
 print(f"\nLightGBM mejora el WAPE del baseline en {mejora:.1f}%.")
 print("Falta el LSTM (script aparte) para cerrar la comparativa de la Fase 2.")
