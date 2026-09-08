@@ -228,6 +228,8 @@ Es necesario precisar esto porque determina la lectura de todas las métricas:
 
 La salida principal es una **predicción de conteo** (número esperado de recogidas), a partir de la cual se deriva un **ranking** de paradas, que es la forma en que realmente se consume.
 
+**Granularidad de la salida:** una fila por **(parada, instante)** en el contexto de Terrassa —14 filas por cada hora consultada— y una fila por **(zona, hora)** en el contexto de Nueva York, que es la unidad en la que el modelo predice. La salida hereda por tanto la granularidad de la entrada: no se agrega ni se desagrega en ningún punto.
+
 | Campo de salida | Descripción | Tipo | Uso posterior |
 |---|---|---|---|
 | `nombre` | Identificador de la parada de taxi (o `zona` en el contexto de Nueva York) | string / integer | Trazabilidad y unión con la geolocalización |
@@ -317,6 +319,12 @@ Esta última cláusula es deliberada: la mejor métrica no es el único criterio
 El motivo es directo: una separación aleatoria permitiría al modelo entrenar con observaciones posteriores a las que predice, es decir, **«ver el futuro»**. Con variables de retardo y fuerte autocorrelación, esto produciría métricas espectaculares y completamente falsas. La partición temporal reproduce el uso real del sistema, donde solo se dispone del pasado.
 
 Volumen resultante: 1.874.664 filas de entrenamiento y 385.032 de prueba, tras descartar las filas de arranque sin retardo.
+
+**Sobre el conjunto de validación.** El esquema emplea dos particiones y no tres, y conviene justificar la ausencia de la tercera antes que dejarla implícita. Un conjunto de validación sirve para tomar decisiones intermedias: seleccionar hiperparámetros, elegir entre variantes de un modelo o decidir cuándo detener el entrenamiento. En este diseño los hiperparámetros de LightGBM se fijan a valores habituales para problemas de conteo de este tamaño, **sin búsqueda sistemática** (apartado 6.4), de modo que no hay ninguna decisión que tomar sobre datos intermedios. El conjunto de prueba se consulta una sola vez, al final, para comparar modelos ya entrenados.
+
+La excepción es el **LSTM**, que sí necesita decidir cuándo parar. Reserva el último 10 % del tramo de entrenamiento como validación interna para la parada temprana. Ese 10 % es cronológicamente posterior al resto del entrenamiento y anterior al conjunto de prueba, de modo que la separación temporal se mantiene y no se introduce fuga.
+
+La contrapartida debe declararse: **no haber usado validación es lo que impide afirmar que la configuración elegida sea óptima**, solo que cumple el criterio de aceptación con holgura. En el momento en que se emprenda una búsqueda de hiperparámetros será imprescindible introducir una tercera partición —o una validación cruzada de origen móvil— para no seleccionar la configuración mirando el conjunto de prueba, que es la forma más común de sobreestimar un resultado sin darse cuenta.
 
 ### 7.2 Cómo se evita la contaminación
 
