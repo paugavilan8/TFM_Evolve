@@ -47,11 +47,9 @@ NYC_PARQUET = DATA_DIR / "processed" / "demanda_nyc_2023.parquet"
 CENTRO = [41.5631, 2.0089]
 DIAS = {1: "Lunes", 2: "Martes", 3: "Miércoles", 4: "Jueves", 5: "Viernes", 6: "Sábado", 7: "Domingo"}
 DIAS_CORTO = {1: "Lun", 2: "Mar", 3: "Mié", 4: "Jue", 5: "Vie", 6: "Sáb", 7: "Dom"}
-# Navegación inferior: (etiqueta, icono Material de Streamlit)
 NAV = [("Conductor", "explore"), ("Registrar", "receipt_long"), ("Análisis", "insights")]
 
-# Paleta única: rojo de marca + ámbar + gris. La demanda alta es ROJA (antes era verde,
-# lo que contradecía el resto de la interfaz).
+# Paleta única: rojo de marca, ámbar y gris. La demanda alta es roja.
 ROJO = "#C0392B"
 ROJO_OSCURO = "#8E2018"
 COLOR = {"Alta": "#C0392B", "Media": "#E0902E", "Baja": "#9AA5B1"}
@@ -63,11 +61,8 @@ COLOR_OSCURO = {**COLOR, "Alta": "#E4715C"}
 def colores(oscuro: bool) -> dict:
     return COLOR_OSCURO if oscuro else COLOR
 
-# El geojson trae nombres genéricos ("Terrassa distrito 01"). Aquí se traducen a los
-# nombres oficiales de los siete distritos de Terrassa, que es lo que aparece en el chip
-# del hero y en el mapa de calor. Se usa el nombre del distrito y no el de un barrio
-# concreto porque cada distrito agrupa varios (el 1 incluye Centre, Vallparadís, Antic
-# Poble de Sant Pere...), y nombrar solo uno sería incorrecto para el resto.
+# El geojson trae nombres genéricos ("Terrassa distrito 01"). Se traducen al nombre
+# oficial del distrito, y no al de un barrio, porque cada distrito agrupa varios.
 ALIAS_DISTRITO = {
     "Terrassa distrito 01": "Centre",
     "Terrassa distrito 02": "Llevant",
@@ -109,7 +104,7 @@ Convierte las comas decimales a punto."""
 # Los widgets nativos de Streamlit siguen [theme] / [theme.dark] de config.toml.
 # Aquí sólo definimos los tokens de las tarjetas propias, alineados con ese tema.
 TOKENS = {
-    # muted era #7A828C: 3,9:1 sobre blanco, por debajo de AA. #6B7280 da 4,8:1.
+    # El gris secundario da 4,8:1 sobre blanco: cumple WCAG AA.
     "light": {"bg": "#F4F5F7", "surface": "#FFFFFF", "ink": "#1A1A1A", "muted": "#6B7280",
               "line": "#EAEDF1", "shadow": "rgba(20,32,43,.07)", "wash": "#FCEDEB",
               "red-ink": "#C0392B"},
@@ -249,7 +244,6 @@ h1, h2, h3 { letter-spacing: -.02em; }
   box-shadow: 0 -6px 22px var(--tt-shadow); }
 .st-key-tt_nav [data-testid="stHorizontalBlock"] { max-width: 780px; margin: 0 auto; gap: 0; }
 .st-key-tt_nav [data-testid="stColumn"] { min-width: 0; }
-/* Botón de navegación: icono arriba, etiqueta debajo, sin caja propia. */
 .st-key-tt_nav .stButton > button { background: transparent !important; border: none !important;
   box-shadow: none !important; padding: 4px 0 2px !important; min-height: 0 !important;
   color: var(--tt-muted) !important; }
@@ -263,8 +257,8 @@ h1, h2, h3 { letter-spacing: -.02em; }
   transition: background .16s ease, color .16s ease; }
 .st-key-tt_nav .stButton > button:hover { color: var(--tt-ink) !important; }
 .st-key-tt_nav .stButton > button:hover span[role="img"] { background: var(--tt-wash); }
-/* Vista activa: píldora roja rellena bajo el icono. La etiqueta usa --tt-red-ink,
-   que se aclara en oscuro para no bajar de 4,5:1 de contraste. */
+/* La etiqueta activa usa --tt-red-ink, que se aclara en oscuro para no bajar de
+   4,5:1 de contraste sobre la superficie. */
 .st-key-tt_nav .stButton > button[kind="primary"] { color: var(--tt-red-ink) !important; }
 .st-key-tt_nav .stButton > button[kind="primary"] span[role="img"] {
   background: var(--tt-red); color: #fff; }
@@ -479,8 +473,8 @@ def leer_registro():
         df = df[df["Fecha"].notna()]
         if "Nº" in df.columns:
             df = df[df["Nº"].astype(str).str.upper() != "EJEMPLO"]
-        # Se renombran TODAS las columnas al nombre canónico que usa Google Sheets:
-        # si no, el análisis funcionaría con Sheets y no con el Excel local.
+        # El Excel etiqueta las columnas de otra forma que Google Sheets: se llevan
+        # todas al nombre canónico para que el análisis funcione con ambas fuentes.
         df = df.rename(columns={"Fecha": "fecha", "Hora recogida": "hora_recogida",
                                 "Hora fin": "hora_fin", "Zona recogida": "zona_recogida",
                                 "Zona destino": "zona_destino",
@@ -897,9 +891,8 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
         return
 
     top = items[0]
-    # Antes se mostraba valor/máximo, que para la parada recomendada vale siempre 100:
-    # era una tautología. Ahora se compara con la media diaria de esa misma parada, que
-    # sí informa de si el momento es bueno o flojo para ella.
+    # Se compara con la media diaria de la propia parada: informa de si el momento es
+    # bueno o flojo para ella, cosa que el cociente sobre el máximo no haría.
     media = top.get("media_dia") or 0
     indice = round(100 * top["valor"] / media) if media else None
     with hueco_hero:
@@ -1215,8 +1208,6 @@ def main():
         vista_analisis(perfil, geo, nombres, paradas, oscuro)
 
     # Navegación inferior fija. Se dibuja al final para que el estado ya esté leído arriba.
-    # Con botones en lugar de segmented_control: éste no llegaba a ocupar el ancho y
-    # recortaba las etiquetas ("Condu..."), y no admite el icono sobre el texto.
     with st.container(key="tt_nav"):
         for col, (nombre, icono) in zip(st.columns(len(NAV)), NAV):
             col.button(f":material/{icono}: {nombre}", key=f"tt_nav_{nombre}",

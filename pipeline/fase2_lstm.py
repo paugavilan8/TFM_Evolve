@@ -17,7 +17,7 @@ Ejecuta en TU máquina, con el venv activado:
     python -m pip install tensorflow lightgbm pandas pyarrow numpy
     python fase2_lstm.py
 
-⚠️ Es el script más pesado. Si te quedas sin memoria, baja SAMPLE_ZONES o WINDOW.
+Es el script más costoso del pipeline: si falta memoria, reducir SAMPLE_ZONES o WINDOW.
 """
 
 import os
@@ -136,4 +136,3 @@ print("\n→ Guardado: resultados_lstm.csv")
 
 mejor = tabla["WAPE_%"].idxmin()
 print(f"\nMejor WAPE: {mejor} ({tabla.loc[mejor, 'WAPE_%']:.1f}%).")
-print("Recuerda: aunque el LSTM no gane, documentar la comparativa completa da rigor a la memoria.")

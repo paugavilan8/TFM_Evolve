@@ -5,7 +5,7 @@ TFM Pau Gavilán
 Ejecuta una vez en TU máquina (necesita internet), desde la raíz del proyecto:
     python scripts/obtener_paradas.py
 
-Después puedes abrir data/external/paradas_terrassa.csv y añadir/corregir las que tu madre
+Después puede abrirse data/external/paradas_terrassa.csv para añadir o corregir las que la conductora
 conozca de verdad (es la experta del terreno). Columnas: nombre, lat, lon.
 """
 
@@ -51,7 +51,7 @@ def main():
     print(f"{len(filas)} paradas guardadas en {SALIDA}")
     if len(filas) == 0:
         print("OSM no tenía paradas etiquetadas en Terrassa. "
-              "Crea el CSV a mano con tu madre: columnas nombre, lat, lon.")
+              "Crear el CSV a mano: columnas nombre, lat, lon.")
 
 
 if __name__ == "__main__":

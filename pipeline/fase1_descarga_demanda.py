@@ -9,7 +9,7 @@ Qué hace este script:
      es "no hubo demanda"). Sin esto el modelo nunca aprende cuándo NO hay demanda.
   4. Une el nombre de zona (Taxi Zone Lookup) y guarda el resultado en Parquet (+ CSV opcional).
 
-⚠️  Ejecuta esto en TU máquina (necesita internet). NO en el entorno de Copilot.
+Requiere conexión a internet.
 Requisitos:  pip install duckdb pandas pyarrow
 Uso:         python fase1_descarga_demanda.py
 """
@@ -124,7 +124,7 @@ if EXPORT_CSV:
 n, nz, tot = con.execute(
     "SELECT COUNT(*), COUNT(DISTINCT zona), SUM(demanda) FROM demanda_final"
 ).fetchone()
-print(f"\n✅ Tabla de demanda lista: {n:,} filas | {nz} zonas | {tot:,} recogidas totales")
+print(f"\nTabla de demanda lista: {n:,} filas | {nz} zonas | {tot:,} recogidas totales")
 print(f"   Guardada en: {out_parquet}")
 print("\n   Demanda media por hora del día (chequeo de sanidad):")
 print(con.execute("""
