@@ -1,9 +1,0 @@
-Medida,Valor,Lectura
-r observado (NYC vs Terrassa),0.883,Correlación de las formas horarias normalizadas
-Media del nulo por permutación,0.002,Correlación esperada si la alineación horaria fuese casual
-Percentil 95 del nulo,0.35,Umbral que hay que superar para no ser azar
-p-valor del test de permutación,5e-05,Proporción de permutaciones que igualan o superan el r observado
-r medio entre distritos de Terrassa,0.98,Suelo urbano genérico: dos perfiles de la MISMA ciudad
-r mínimo entre distritos de Terrassa,0.935,El par de distritos menos parecido entre sí
-r NYC vs distrito más parecido,0.916,Mejor distrito: 0827903
-r NYC vs distrito menos parecido,0.774,Peor distrito: 0827904
