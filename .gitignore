@@ -9,7 +9,7 @@ __pycache__/
 # Secretos: nunca subir
 .streamlit/secrets.toml
 
-# Datos generados por el pipeline (se regeneran con las Fases 1 y 2)
+# Datos generados por el pipeline de modelado (se regeneran con las fases 1 y 2)
 data/raw/
 data/processed/
 data/gold/
@@ -20,6 +20,9 @@ Registro_carreras_TFM.xlsx
 
 # Descarga de movilidad MITMA desde R
 spanish_od_data/
+
+# Repositorio privado de trabajo (modelo, memoria y defensa): se versiona aparte
+privado/
 
 # Versiones antiguas y pruebas: no forma parte del proyecto
 scratch/

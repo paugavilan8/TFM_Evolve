@@ -11,6 +11,8 @@ Este documento recoge el diseño del análisis y la estrategia de modelado tal y
 
 Por trazabilidad y honestidad metodológica, cada apartado presenta primero **la decisión de diseño y su justificación** —que es lo que esta entrega pide— y añade, cuando procede, un bloque **`Resultado obtenido`** con la evidencia ya disponible. Esto permite juzgar no solo si el diseño era razonable, sino si las decisiones se sostuvieron al contrastarlas con los datos.
 
+Este repositorio contiene la aplicación, sus datos y las entregas. El código de análisis y modelado al que se refiere este documento —`pipeline/`, `results/` y `models/`— se conserva en un repositorio privado del proyecto, al que se puede dar acceso al tutor y al tribunal.
+
 Ninguna decisión previa de las entregas 1 a 3 se ha eliminado. Las modificaciones respecto al diseño original se señalan en el apartado 9.
 
 ---
@@ -304,9 +306,9 @@ Un modelo se selecciona como modelo de producción si y solo si cumple **todas**
 Esta última cláusula es deliberada: la mejor métrica no es el único criterio. Un modelo ligeramente menos preciso pero estable, explicable y reentrenable es preferible para un producto que una persona sin perfil técnico va a usar a diario.
 
 > **Resultado obtenido**
-> LightGBM cumple las cuatro condiciones. La mejora relativa sobre el baseline es del 42 % en WAPE (del 28,5 % al 16,5 %), muy por encima del umbral del 20 %. El LSTM cumple la condición 1 pero no la 2 (coste de minutos frente a segundos) ni la 3, y además queda por debajo en métrica, por lo que la cláusula 4 ni siquiera llega a aplicarse. Prophet no cumple la condición 1.
+> LightGBM cumple las cuatro condiciones. La mejora relativa sobre el baseline es del 42 % en WAPE (del 28,5 % al 16,5 %), con intervalo de confianza del 95 % entre el 36,5 % y el 47,4 %, muy por encima del umbral del 20 % en el periodo de prueba. En la validación de origen móvil cumple el umbral en los cuatro cortes, aunque en uno de ellos por muy poco margen (apartado 7.4). El LSTM cumple la condición 1 pero no la 2 (coste de minutos frente a segundos) ni la 3, y además queda por debajo en métrica, por lo que la cláusula 4 ni siquiera llega a aplicarse. Prophet no cumple la condición 1.
 >
-> Los hiperparámetros de LightGBM se fijaron a valores habituales para problemas de conteo de este tamaño, **sin búsqueda sistemática**. Es una limitación real: no puede afirmarse que sea la configuración óptima, solo que la configuración razonable elegida ya cumple el criterio de aceptación con holgura.
+> Los hiperparámetros de LightGBM se fijaron a valores habituales para problemas de conteo de este tamaño, **sin búsqueda sistemática**. Es una limitación real: no puede afirmarse que sea la configuración óptima, solo que la configuración razonable elegida cumple el criterio de aceptación en todos los periodos evaluados.
 
 ---
 
@@ -324,7 +326,7 @@ Volumen resultante: 1.874.664 filas de entrenamiento y 385.032 de prueba, tras d
 
 La excepción es el **LSTM**, que sí necesita decidir cuándo parar. Reserva el último 10 % del tramo de entrenamiento como validación interna para la parada temprana. Ese 10 % es cronológicamente posterior al resto del entrenamiento y anterior al conjunto de prueba, de modo que la separación temporal se mantiene y no se introduce fuga.
 
-La contrapartida debe declararse: **no haber usado validación es lo que impide afirmar que la configuración elegida sea óptima**, solo que cumple el criterio de aceptación con holgura. En el momento en que se emprenda una búsqueda de hiperparámetros será imprescindible introducir una tercera partición —o una validación cruzada de origen móvil— para no seleccionar la configuración mirando el conjunto de prueba, que es la forma más común de sobreestimar un resultado sin darse cuenta.
+La contrapartida debe declararse: **no haber usado validación es lo que impide afirmar que la configuración elegida sea óptima**, solo que cumple el criterio de aceptación en los cuatro cortes de la validación de origen móvil del apartado 7.4. En el momento en que se emprenda una búsqueda de hiperparámetros será imprescindible introducir una tercera partición —o una validación cruzada de origen móvil— para no seleccionar la configuración mirando el conjunto de prueba, que es la forma más común de sobreestimar un resultado sin darse cuenta.
 
 ### 7.2 Cómo se evita la contaminación
 
@@ -349,6 +351,40 @@ La contrapartida debe declararse: **no haber usado validación es lo que impide 
 ### 7.4 Comparación con el baseline
 
 El baseline se **recalcula sobre exactamente las mismas filas** que cada modelo evalúa. Esto importa: cuando Prophet y el LSTM se evalúan sobre submuestras de zonas (30 y 20 respectivamente, por coste computacional), tanto el baseline como LightGBM se reentrenan y recalculan sobre esas mismas zonas. De lo contrario la comparación mediría poblaciones distintas y no diría nada.
+
+Un único corte deja además dos preguntas abiertas —si el resultado depende del periodo elegido y si la diferencia es significativa—, que se abordan con dos técnicas complementarias (`pipeline/fase3_validacion_robusta.py`):
+
+- **Validación de origen móvil**: cuatro cortes con ventana de entrenamiento creciente, cada uno evaluado sobre el mes siguiente. Mide la **variación entre periodos**.
+- **Bootstrap por bloques de un día**: 5.000 remuestreos con reemplazo de los 61 días del periodo de prueba. Se remuestrean días y no filas porque las filas de un mismo día están correlacionadas, y remuestrear filas daría intervalos artificialmente estrechos. Mide la **incertidumbre dentro del periodo**.
+
+> **Resultado obtenido — validación de origen móvil**
+>
+> | Corte | Entrenamiento | Mes evaluado | WAPE baseline | WAPE LightGBM | Mejora |
+> |---|---|---|---|---|---|
+> | 1 | ene–ago | Septiembre | 48,54 % | 24,10 % | 50,4 % |
+> | 2 | ene–sep | Octubre | 21,00 % | 16,70 % | **20,5 %** |
+> | 3 | ene–oct | Noviembre | 26,52 % | 15,97 % | 39,8 % |
+> | 4 | ene–nov | Diciembre | 30,55 % | 16,42 % | 46,3 % |
+> | **Media ± desv.** | | | 31,65 ± 11,92 % | **18,30 ± 3,88 %** | 39,2 % |
+>
+> Cada entrenamiento tarda entre 13 y 20 segundos. Tres lecturas:
+>
+> 1. **LightGBM supera al baseline en los cuatro cortes.** El resultado no es un accidente del bimestre elegido.
+> 2. **Es mucho más estable**: su WAPE varía con una desviación típica de 3,9 puntos frente a 11,9 del baseline. Es el criterio de estabilidad del apartado 6.3, ahora cuantificado.
+> 3. **La mejora varía entre periodos, del 20,5 % al 50,4 %, y en octubre queda justo sobre el umbral del 20 %.** No porque el modelo empeore —su 16,7 % es de los mejores— sino porque octubre es un mes excepcionalmente estable en el que el baseline acierta más de lo habitual. Septiembre castiga a ambos por el cambio de régimen tras el verano. Y el 16,5 % de la evaluación principal cae en el lado favorable: **la media fuera de muestra es del 18,3 %**.
+
+> **Resultado obtenido — bootstrap sobre el periodo de prueba**
+>
+> | Magnitud | Estimación | IC 95 % |
+> |---|---|---|
+> | WAPE baseline | 28,55 % | [24,62 %, 33,06 %] |
+> | WAPE LightGBM | 16,47 % | [15,54 %, 17,49 %] |
+> | Diferencia | 12,08 puntos | [9,01, 15,63] |
+> | Mejora relativa | 42,31 % | [36,54 %, 47,39 %] |
+>
+> En **ninguno de los 5.000 remuestreos** el baseline iguala o supera a LightGBM (p < 0,0002), y el límite inferior de la mejora, 36,5 %, queda muy por encima del umbral del 20 %. La diferencia es significativa sin ambigüedad.
+>
+> Conviene no confundir ambas técnicas: el intervalo del bootstrap es estrecho porque mide la incertidumbre *dentro* de noviembre-diciembre, mientras que la validación de origen móvil muestra que *entre* periodos la mejora varía mucho más. La primera responde a si la diferencia es real; la segunda, a si es estable. Un intervalo estrecho no garantiza lo segundo.
 
 ### 7.5 Análisis de errores
 
@@ -399,7 +435,7 @@ Esta tercera alternativa no es hipotética: **es exactamente lo que alimenta hoy
 | Baseline | Persistencia semanal, recalculado por submuestra | Mide la mejora real, no una comparación desalineada |
 | Criterio de aceptación | ≥ 20 % de mejora relativa en WAPE | Umbral por debajo del cual el modelo no justifica su complejidad |
 
-> **Limitación declarada**: la validación emplea **un único corte temporal**. Un esquema de validación cruzada de origen móvil, con varios cortes sucesivos, permitiría acompañar las métricas de intervalos de confianza y descartar que el resultado dependa del bimestre concreto elegido. No se ha implementado por coste de cómputo.
+> **Validación complementaria**: además del corte principal, se ha realizado una validación de origen móvil con cuatro cortes y un bootstrap por bloques diarios (apartado 7.4). La limitación que subsiste no es de método sino de resultado: la mejora sobre el baseline varía entre periodos del 20,5 % al 50,4 %.
 
 ---
 
@@ -519,6 +555,7 @@ Decisiones que las entregas anteriores no fijaban y que este diseño concreta.
 | 14 | Análisis de errores | Estaba planteado pero no ejecutado. **Ejecutado y reportado** en 7.5. Reveló que el modelo es inservible en zonas de demanda baja, limitación que el WAPE global ocultaba |
 | 15 | Medición del objetivo | El objetivo de reducir kilómetros en vacío, declarado en las entregas 1 y 2, no tenía forma de medirse. El producto **mide ahora el tiempo en vacío** a partir del hueco entre carreras registradas |
 | 16 | Muestra del MITMA | La entrega 2 indicaba «una semana por trimestre de 2023». Se concreta: 28 días, las semanas del 13–19 de febrero, 15–21 de mayo, 11–17 de septiembre y 13–19 de noviembre, extraídos con el paquete `spanishoddata` a nivel de distrito (`ver = 2`) y filtrados por el código INE 08279 |
+| 17 | Robustez de la evaluación | El diseño preveía un único corte temporal y declaraba la validación cruzada como limitación «por coste de cómputo». Cada entrenamiento tarda 13–20 segundos, de modo que la justificación no se sostenía. Se han **realizado** una validación de origen móvil con cuatro cortes y un bootstrap por bloques diarios (apartado 7.4) |
 
 Ninguna de estas modificaciones altera la idea de producto seleccionada, el usuario al que se dirige ni las fuentes de datos previstas.
 
