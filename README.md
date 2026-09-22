@@ -37,15 +37,25 @@ Registrar y el registro de carreras en la nube necesitan una clave de Gemini y u
 cuenta de servicio de Google Sheets en `.streamlit/secrets.toml`, que no se incluye en el
 repositorio. Sin ellas, la vista Conductor funciona igual.
 
+El mapa usa los fondos de CARTO, que desde 2026 piden una clave gratuita
+([carto.com/basemaps/apikey](https://carto.com/basemaps/apikey)). Se añade a los mismos
+secretos:
+
+```toml
+CARTO_API_KEY = "tu-clave"
+```
+
+Sin clave, el mapa usa OpenStreetMap en gris.
+
 ## Pruebas
 
 ```bash
 python tests/test_analisis.py
 ```
 
-22 comprobaciones con casos de respuesta conocida sobre la duración de las carreras, el
-tiempo en vacío, el emparejamiento de direcciones con paradas y la tasa de acierto del
-recomendador.
+41 comprobaciones con casos de respuesta conocida sobre la duración de las carreras, el
+tiempo en vacío, el emparejamiento de direcciones con paradas, la tasa de acierto del
+recomendador, la revisión de los tickets antes de guardarlos y el fondo del mapa.
 
 ## Datos
 

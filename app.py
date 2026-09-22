@@ -12,7 +12,7 @@ Datos que consume (rutas relativas a la raíz del proyecto):
   data/registro/  Registro_carreras_TFM.xlsx  (si no hay Google Sheets configurado)
   data/processed/ demanda_nyc_2023.parquet    (opcional: bloque de transferencia NYC)
 Configuración: .streamlit/config.toml y, para escáner/rentabilidad en la nube, los
-secretos (GEMINI_API_KEY, SHEET_ID, cuenta de servicio).
+secretos (GEMINI_API_KEY, CARTO_API_KEY para el mapa, SHEET_ID, cuenta de servicio).
 
     python -m pip install streamlit folium streamlit-folium branca plotly pandas openpyxl \
                           google-generativeai gspread google-auth pillow holidays
@@ -84,6 +84,10 @@ TOP_K = 3          # el sistema "acierta" si la parada real está entre las K pr
 MODELO = "gemini-2.5-flash"
 COLUMNAS = ["fecha", "hora_recogida", "hora_fin", "zona_recogida", "zona_destino",
             "distancia_km", "importe_eur", "origen_servicio", "tarifa"]
+# Lo que ve la conductora al revisar un ticket; por dentro se mantienen las claves del JSON.
+ETIQUETAS = {"fecha": "Fecha", "hora_recogida": "Hora inicio", "hora_fin": "Hora fin",
+             "zona_recogida": "Origen", "zona_destino": "Destino", "distancia_km": "Km",
+             "importe_eur": "Importe (€)", "origen_servicio": "Servicio", "tarifa": "Tarifa"}
 PROMPT = """Eres un asistente que lee tickets de taxi (pueden estar en catalán o español).
 Extrae los datos y responde SOLO con un objeto JSON (sin texto alrededor), usando null
 cuando un dato no aparezca. Claves:
@@ -348,13 +352,17 @@ def cargar_paradas():
 
 
 # =============================== Gemini / Sheets (sin cambios) ===============================
-def obtener_api_key():
+def _secreto(nombre):
     try:
-        if "GEMINI_API_KEY" in st.secrets:
-            return st.secrets["GEMINI_API_KEY"]
+        if nombre in st.secrets:
+            return st.secrets[nombre]
     except Exception:
         pass
-    return os.environ.get("GEMINI_API_KEY")
+    return os.environ.get(nombre)
+
+
+def obtener_api_key():
+    return _secreto("GEMINI_API_KEY")
 
 
 def _preparar_imagen(uploaded):
@@ -381,6 +389,54 @@ def extraer(uploaded, api_key):
         txt = txt.strip("`")
         txt = txt[4:] if txt.lower().startswith("json") else txt
     return json.loads(txt.strip())
+
+
+def _como_lista(resultado):
+    """Gemini devuelve un objeto por ticket, o una lista si en la foto hay varios."""
+    if isinstance(resultado, list):
+        return [r for r in resultado if isinstance(r, dict)]
+    return [resultado] if isinstance(resultado, dict) else []
+
+
+def _falta(valor) -> bool:
+    if valor is None:
+        return True
+    if isinstance(valor, str):
+        return valor.strip().lower() in ("", "none", "null", "nan")
+    try:
+        return bool(pd.isna(valor))
+    except (TypeError, ValueError):
+        return False
+
+
+def ticket_legible(fila) -> bool:
+    """Todo ticket de taxi lleva fecha e importe. Si Gemini no encuentra ninguno de los
+    dos, la foto no es un ticket o no se puede leer, y no debe llegar a la tabla."""
+    return not (_falta(fila.get("fecha")) and _falta(fila.get("importe_eur")))
+
+
+def revisar_para_guardar(df):
+    """Separa las carreras listas para guardar de las que están a medias.
+
+    Las filas vacías (una fila añadida sin querer en la tabla) se descartan sin más. Las
+    que no tienen fecha o importe no se guardan: se devuelve su posición en la tabla,
+    contando desde 1, para que la conductora sepa cuál corregir.
+    """
+    listas, a_medias = [], []
+    for pos, (_, fila) in enumerate(df.iterrows(), 1):
+        if all(_falta(fila.get(c)) for c in COLUMNAS):
+            continue
+        if _falta(fila.get("fecha")) or _falta(fila.get("importe_eur")):
+            a_medias.append(pos)
+        else:
+            listas.append(fila)
+    return pd.DataFrame(listas).reset_index(drop=True), a_medias
+
+
+def _filas_en_texto(posiciones) -> str:
+    if len(posiciones) == 1:
+        return f"la fila {posiciones[0]}"
+    return "las filas " + ", ".join(map(str, posiciones[:-1])) + f" y {posiciones[-1]}"
 
 
 def parse_fecha(s):
@@ -818,6 +874,26 @@ def estilo_grafico(fig, oscuro, sufijo_x=None, alto=280):
     return fig
 
 
+def capa_base(oscuro, clave=None):
+    """Fondo del mapa: URL de las teselas, atribución y filtro CSS.
+
+    CARTO exige una clave gratuita desde 2026 y, sin ella, sirve las teselas con una marca
+    de agua. Si no hay clave se usa OpenStreetMap pasado a gris, para que los colores de
+    los niveles destaquen igual que sobre el mapa de CARTO.
+    """
+    osm = ('&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> '
+           'contributors')
+    if clave:
+        from urllib.parse import quote
+        estilo = "dark_all" if oscuro else "light_all"
+        url = (f"https://basemaps.cartocdn.com/rastertiles/{estilo}/{{z}}/{{x}}/{{y}}{{r}}.png"
+               f"?key={quote(str(clave), safe='')}")
+        return url, osm + ' &copy; <a href="https://carto.com/attributions">CARTO</a>', ""
+    filtro = ("grayscale(1) invert(1) brightness(.85) contrast(.9)" if oscuro
+              else "grayscale(1) brightness(1.05) contrast(.9)")
+    return "https://tile.openstreetmap.org/{z}/{x}/{y}.png", osm, filtro
+
+
 def dibujar_mapa_paradas(items, oscuro):
     try:
         import folium
@@ -826,8 +902,14 @@ def dibujar_mapa_paradas(items, oscuro):
         st.warning("Instala el mapa: python -m pip install folium streamlit-folium")
         return
     paleta = colores(oscuro)
-    tiles = "cartodbdark_matter" if oscuro else "cartodbpositron"
-    m = folium.Map(location=CENTRO, zoom_start=14, tiles=tiles, zoom_control=False)
+    url, atribucion, filtro = capa_base(oscuro, _secreto("CARTO_API_KEY"))
+    # Sin zoom con la rueda: al bajar por la página con el ratón, el mapa se alejaba.
+    m = folium.Map(location=CENTRO, zoom_start=14, tiles=None, zoom_control=False,
+                   scroll_wheel_zoom=False)
+    folium.TileLayer(tiles=url, attr=atribucion, max_zoom=19, class_name="tt-fondo").add_to(m)
+    if filtro:
+        m.get_root().header.add_child(
+            folium.Element(f"<style>.tt-fondo {{ filter: {filtro}; }}</style>"))
     for i, it in enumerate(items):
         if pd.isna(it["lat"]) or pd.isna(it["lon"]):
             continue
@@ -944,26 +1026,52 @@ def vista_registrar():
         filas = []
         barra = st.progress(0.0)
         for i, img in enumerate(imagenes, 1):
+            cual = ("La foto" if len(imagenes) == 1
+                    else f"La foto «{getattr(img, 'name', i)}»")
             try:
-                filas.append(extraer(img, api_key))
+                leidas = _como_lista(extraer(img, api_key))
             except Exception as e:
-                st.error(f"No pude leer {getattr(img, 'name', 'la foto')}: {e}")
+                st.error(f"{cual} no se ha podido leer. Comprueba que el ticket se ve entero "
+                         "y con buena luz, y vuelve a probar.")
+                with st.expander("Detalle técnico"):
+                    st.code(str(e))
+                leidas = None
+            if leidas is not None:
+                buenas = [f for f in leidas if ticket_legible(f)]
+                if not buenas:
+                    st.warning(f"{cual} no parece un ticket de taxi: no encuentro ni la "
+                               "fecha ni el importe. Prueba con otra foto.")
+                filas.extend(buenas)
             barra.progress(i / len(imagenes))
         barra.empty()
         if filas:
-            st.session_state["tickets"] = pd.DataFrame(filas)
+            st.session_state["tickets"] = pd.DataFrame(filas).reindex(columns=COLUMNAS)
 
     if "tickets" in st.session_state:
         encabezado("grid", "Revisa y corrige antes de guardar")
-        editado = st.data_editor(st.session_state["tickets"], width="stretch",
-                                 num_rows="dynamic", key="tt_editor")
+        editado = st.data_editor(
+            st.session_state["tickets"], width="stretch", num_rows="dynamic",
+            key="tt_editor", hide_index=True,
+            column_config={c: st.column_config.Column(e) for c, e in ETIQUETAS.items()})
         if st.button("Añadir al registro", type="primary", width="stretch"):
-            try:
-                destino = guardar(editado)
-                st.success(f"Añadidas {len(editado)} carrera(s) al registro ({destino}).")
-                del st.session_state["tickets"]
-            except Exception as e:
-                st.error(f"No pude guardar: {e}")
+            listas, a_medias = revisar_para_guardar(editado)
+            if a_medias:
+                una = len(a_medias) == 1
+                st.error(f"Falta la fecha o el importe en {_filas_en_texto(a_medias)}. "
+                         f"{'Complétala o bórrala' if una else 'Complétalas o bórralas'} "
+                         "antes de guardar.")
+            elif listas.empty:
+                st.warning("No hay ninguna carrera que guardar.")
+            else:
+                try:
+                    destino = guardar(listas)
+                    st.success(f"Añadidas {len(listas)} carrera(s) al registro ({destino}).")
+                    del st.session_state["tickets"]
+                except Exception as e:
+                    st.error("No se han podido guardar las carreras. Comprueba la conexión "
+                             "y vuelve a probar.")
+                    with st.expander("Detalle técnico"):
+                        st.code(str(e))
 
 
 def vista_analisis(perfil, geo, nombres, paradas, oscuro):

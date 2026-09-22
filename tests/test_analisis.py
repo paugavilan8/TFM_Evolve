@@ -124,6 +124,50 @@ a, e = tasa_acierto([direcciones[top3[0]], "Calle Falsa 123", direcciones[ultima
 check("las no emparejables se excluyen del cálculo", (a, e), (1, 2))
 
 # --------------------------------------------------------------------------
+print("\n5) Registrar: fotos que no son tickets y carreras a medias")
+
+check("sin fecha ni importe -> no es un ticket",
+      app.ticket_legible({"fecha": None, "importe_eur": None, "zona_recogida": "x"}), False)
+check("'null' y cadena vacía cuentan como ausentes",
+      app.ticket_legible({"fecha": "", "importe_eur": "null"}), False)
+check("con fecha y sin importe -> se revisa", app.ticket_legible({"fecha": "2026-09-20"}), True)
+check("con importe y sin fecha -> se revisa", app.ticket_legible({"importe_eur": 12.5}), True)
+check("un objeto -> lista de uno", app._como_lista({"fecha": "2026-09-20"}),
+      [{"fecha": "2026-09-20"}])
+check("una lista conserva solo los objetos",
+      len(app._como_lista([{"a": 1}, {"b": 2}, "texto"])), 2)
+check("una respuesta que no es JSON de objetos -> lista vacía", app._como_lista("texto"), [])
+
+tabla = pd.DataFrame([
+    {"fecha": "2026-09-20", "hora_recogida": "08:00", "importe_eur": 12.5},
+    {"fecha": "2026-09-20", "hora_recogida": "09:00", "importe_eur": None},
+    {"fecha": None, "hora_recogida": None, "importe_eur": None},
+    {"fecha": None, "hora_recogida": "10:00", "importe_eur": 8.0},
+]).reindex(columns=app.COLUMNAS)
+listas, a_medias = app.revisar_para_guardar(tabla)
+check("solo se guarda la carrera completa", len(listas), 1)
+check("se señalan las filas 2 y 4; la vacía se ignora", a_medias, [2, 4])
+check("mensaje con una fila", app._filas_en_texto([2]), "la fila 2")
+check("mensaje con varias filas", app._filas_en_texto([1, 2, 4]), "las filas 1, 2 y 4")
+
+print("\n6) Fondo del mapa: CARTO con clave, OpenStreetMap en gris sin ella")
+
+url, atribucion, filtro = app.capa_base(False, "abc123")
+check("con clave y tema claro -> CARTO light_all", "rastertiles/light_all/" in url, True)
+check("la clave va en el parámetro key", url.endswith("?key=abc123"), True)
+check("con CARTO no hace falta filtro", filtro, "")
+check("la atribución cita a CARTO y a OpenStreetMap",
+      "CARTO" in atribucion and "OpenStreetMap" in atribucion, True)
+check("con clave y tema oscuro -> CARTO dark_all",
+      "rastertiles/dark_all/" in app.capa_base(True, "abc123")[0], True)
+check("la clave se codifica en la URL", app.capa_base(False, "a b&c")[0].endswith("?key=a%20b%26c"),
+      True)
+url, atribucion, filtro = app.capa_base(False, None)
+check("sin clave -> teselas de OpenStreetMap", url.startswith("https://tile.openstreetmap.org/"),
+      True)
+check("sin clave el fondo se pasa a gris", "grayscale(1)" in filtro, True)
+
+# --------------------------------------------------------------------------
 print("\n" + "=" * 70)
 if fallos:
     print("FALLAN %d comprobaciones: %s" % (len(fallos), fallos))
