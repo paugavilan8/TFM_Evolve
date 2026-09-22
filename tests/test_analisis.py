@@ -167,6 +167,18 @@ check("sin clave -> teselas de OpenStreetMap", url.startswith("https://tile.open
       True)
 check("sin clave el fondo se pasa a gris", "grayscale(1)" in filtro, True)
 
+print("\n7) Festivos: solo cambian el patrón en el modo «Ahora mismo»")
+
+import datetime as dt  # noqa: E402
+
+diada = dt.date(2026, 9, 11)            # viernes y festivo en Cataluña
+check("ahora mismo en la Diada -> patrón de domingo",
+      app.dia_del_patron(5, diada, True), (7, True))
+check("planificando un viernes en la Diada -> patrón de viernes",
+      app.dia_del_patron(5, diada, False), (5, False))
+check("ahora mismo en un martes normal -> patrón de martes",
+      app.dia_del_patron(2, dt.date(2026, 9, 22), True), (2, False))
+
 # --------------------------------------------------------------------------
 print("\n" + "=" * 70)
 if fallos:

@@ -601,6 +601,16 @@ def es_festivo(fecha):
         return False
 
 
+def dia_del_patron(dia, fecha, en_vivo):
+    """Día de la semana cuyo patrón de demanda se usa, y si hoy es festivo.
+
+    Un festivo se comporta como un domingo, pero solo en el modo «Ahora mismo»: al
+    planificar se elige un día de la semana, no una fecha, y el festivo de hoy no aplica.
+    """
+    festivo = bool(en_vivo and es_festivo(fecha))
+    return (7 if festivo else dia), festivo
+
+
 @st.cache_data(ttl=1800)
 def clima_actual():
     import urllib.request
@@ -946,16 +956,14 @@ def vista_conductor(perfil, geo, nombres, paradas, oscuro):
                             key="tt_vivo")
 
     if en_vivo:
-        dia, hora, fecha = ahora.isoweekday(), ahora.hour, ahora.date()
+        dia, hora = ahora.isoweekday(), ahora.hour
     else:
         d1, d2 = st.columns([1, 2])
         dia = d1.selectbox("Día", list(DIAS), format_func=lambda d: DIAS[d],
                            index=ahora.isoweekday() - 1)
         hora = d2.slider("Hora", 0, 23, ahora.hour)
-        fecha = ahora.date()
 
-    festivo = es_festivo(fecha)
-    dia_efectivo = 7 if festivo else dia   # un festivo se comporta como un domingo
+    dia_efectivo, festivo = dia_del_patron(dia, ahora.date(), en_vivo)
 
     paradas_dist = paradas_con_distrito(paradas, geo)
     evento = None

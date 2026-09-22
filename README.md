@@ -53,9 +53,10 @@ Sin clave, el mapa usa OpenStreetMap en gris.
 python tests/test_analisis.py
 ```
 
-41 comprobaciones con casos de respuesta conocida sobre la duración de las carreras, el
+44 comprobaciones con casos de respuesta conocida sobre la duración de las carreras, el
 tiempo en vacío, el emparejamiento de direcciones con paradas, la tasa de acierto del
-recomendador, la revisión de los tickets antes de guardarlos y el fondo del mapa.
+recomendador, la revisión de los tickets antes de guardarlos, el fondo del mapa y los
+festivos.
 
 ## Datos
 
