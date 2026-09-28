@@ -159,6 +159,9 @@ h1, h2, h3 { letter-spacing: -.02em; }
   color: var(--tt-ink); margin: 22px 0 12px; letter-spacing: -.01em; }
 .tt-h svg { width: 19px; height: 19px; color: var(--tt-red); flex: none; }
 .tt-sub { color: var(--tt-muted); font-size: .9rem; margin: -6px 0 16px; }
+.tt-demo { display: inline-block; background: var(--tt-wash); color: var(--tt-red-ink);
+  font-weight: 700; font-size: .82rem; padding: 5px 12px; border-radius: 999px;
+  margin: -6px 0 14px; }
 
 /* ---------- Hero de recomendación ---------- */
 .tt-hero { background: linear-gradient(135deg, #C0392B 0%, #A32A1E 55%, #7E1B14 100%);
@@ -540,6 +543,85 @@ def leer_registro():
         return df if len(df) else None
     except Exception:
         return None
+
+
+# =============================== Modo demostración ===============================
+# Calles inventadas para las recogidas fuera de parada. Ninguna comparte con las paradas
+# las palabras que usa el emparejamiento, así que nunca cuentan como recogida en parada.
+CALLES_DEMO = ["Carrer de la Font, 14", "Avinguda del Molí, 52", "Carrer dels Horts, 7",
+               "Plaça del Pou, 3", "Carrer de les Roses, 21", "Avinguda de la Serra, 88",
+               "Carrer del Forn, 11", "Carrer de la Riera, 36", "Passatge dels Pins, 5",
+               "Carrer del Mirador, 19"]
+DESTINOS_DEMO = CALLES_DEMO + ["Aeroport del Prat, T1", "Estació de Sants", "Sabadell centre"]
+
+
+def modo_demo() -> bool:
+    """Con ?demo=1 en la dirección, la app usa carreras ficticias y no guarda nada.
+
+    Sirve para enseñar la app sin mostrar los datos reales de la conductora ni las
+    direcciones de sus clientes.
+    """
+    try:
+        return str(st.query_params.get("demo", "")).strip().lower() in ("1", "true", "si", "sí")
+    except Exception:
+        return False
+
+
+def registro_demo(paradas, semilla=7):
+    """Dos semanas de carreras inventadas, con la forma de las columnas de Google Sheets.
+
+    Un tercio de las recogidas se hace en una parada, elegida en proporción a sus plazas
+    y no a lo que recomienda la app, para no amañar la evaluación del recomendador.
+    """
+    rng = np.random.default_rng(semilla)
+    en_parada = paradas[["direccion", "plazas"]].dropna()
+    pesos = en_parada["plazas"].astype(float).to_numpy()
+    pesos = pesos / pesos.sum()
+    filas = []
+    for fecha in pd.date_range("2026-09-14", "2026-09-26", freq="D"):
+        if fecha.dayofweek == 6:                       # descansa el domingo
+            continue
+        t = fecha + pd.Timedelta(minutes=int(rng.integers(390, 450)))
+        fin_turno = fecha + pd.Timedelta(hours=15)
+        while t < fin_turno:
+            km = round(float(rng.uniform(1.5, 9.0)), 1)
+            dur = int(round(km * rng.uniform(2.0, 3.2) + rng.integers(2, 6)))
+            parada = rng.random() < 0.35
+            origen = (en_parada["direccion"].iloc[rng.choice(len(en_parada), p=pesos)]
+                      if parada else CALLES_DEMO[rng.integers(len(CALLES_DEMO))])
+            fin = t + pd.Timedelta(minutes=dur)
+            filas.append({
+                "fecha": fecha.strftime("%Y-%m-%d"),
+                "hora_recogida": t.strftime("%H:%M"),
+                "hora_fin": fin.strftime("%H:%M"),
+                "zona_recogida": origen,
+                "zona_destino": DESTINOS_DEMO[rng.integers(len(DESTINOS_DEMO))],
+                "distancia_km": km,
+                "importe_eur": round(2.4 + 1.25 * km + 0.35 * dur, 2),
+                "origen_servicio": None if parada else "Emisora",
+                "tarifa": "T1",
+            })
+            t = fin + pd.Timedelta(minutes=int(rng.integers(4, 36)))
+    return pd.DataFrame(filas)
+
+
+def registro_actual(paradas):
+    return registro_demo(paradas) if modo_demo() else leer_registro()
+
+
+def origen_de_carreras(detalle, referencias):
+    """Dónde empezó cada carrera, sin enseñar ninguna dirección.
+
+    Cada carrera cuenta en la parada donde empezó o, si no se puede emparejar con una,
+    como recogida en la calle o por aviso de la emisora.
+    """
+    lugar = detalle["zona_recogida"].map(
+        lambda t: (None if pd.isna(t) else emparejar_parada(t, referencias))
+        or "En la calle o por aviso")
+    return (detalle.assign(**{"Dónde empezó": lugar})
+            .groupby("Dónde empezó")
+            .agg(Carreras=("importe_eur", "size"), **{"Importe medio (€)": ("importe_eur", "mean")})
+            .sort_values("Carreras", ascending=False).round(2))
 
 
 # =============================== Geometría / demanda (sin cambios) ===============================
@@ -1071,6 +1153,11 @@ def vista_registrar():
             elif listas.empty:
                 st.warning("No hay ninguna carrera que guardar.")
             else:
+                if modo_demo():
+                    st.success(f"Modo demostración: {len(listas)} carrera(s) revisada(s). "
+                               "No se guarda nada en el registro.")
+                    del st.session_state["tickets"]
+                    return
                 try:
                     destino = guardar(listas)
                     st.success(f"Añadidas {len(listas)} carrera(s) al registro ({destino}).")
@@ -1094,7 +1181,7 @@ def vista_analisis(perfil, geo, nombres, paradas, oscuro):
                 'de tus carreras.</div>', unsafe_allow_html=True)
 
     # --- Rentabilidad real, arriba porque es lo que el conductor mira primero ---
-    reg = leer_registro()
+    reg = registro_actual(paradas)
     detalle = None
     if reg is None or len(reg) == 0:
         tarjetas_metrica([("route", "—", "Carreras"), ("euro", "—", "Ingresos"),
@@ -1221,16 +1308,6 @@ def vista_analisis(perfil, geo, nombres, paradas, oscuro):
         elif len(por_hora_v):
             st.bar_chart(por_hora_v)
 
-        if "zona_destino" in v.columns:
-            por_destino = (v.groupby(v["zona_destino"].astype(str).str.slice(0, 34))
-                            ["hueco_min"].agg(["mean", "size"]))
-            por_destino = por_destino[por_destino["size"] >= 2].sort_values("mean")
-            if len(por_destino):
-                st.markdown('<div class="tt-sub">Dónde cuesta más volver a cargar tras '
-                            'dejar al cliente:</div>', unsafe_allow_html=True)
-                st.dataframe(por_destino.rename(columns={"mean": "Min. en vacío",
-                                                         "size": "Carreras"}).round(0),
-                             width="stretch")
 
     # --- ¿Acierta el sistema? Evaluación del recomendador ---
     encabezado("gauge", "¿Acierta el sistema?")
@@ -1282,19 +1359,15 @@ def vista_analisis(perfil, geo, nombres, paradas, oscuro):
                        f"ese día de la semana. Las carreras que no se pueden emparejar "
                        f"con una parada se excluyen del cálculo.")
 
-    # --- Flujos origen-destino de las carreras reales ---
-    if detalle is not None and len(detalle) and "zona_destino" in detalle.columns:
-        flu = detalle.dropna(subset=["zona_recogida", "zona_destino"])
-        if len(flu):
-            encabezado("route", "De dónde a dónde")
-            tabla_flu = (flu.assign(
-                            Origen=flu["zona_recogida"].astype(str).str.slice(0, 30),
-                            Destino=flu["zona_destino"].astype(str).str.slice(0, 30))
-                         .groupby(["Origen", "Destino"])
-                         .agg(Carreras=("importe_eur", "size"),
-                              Importe=("importe_eur", "mean"))
-                         .sort_values("Carreras", ascending=False).head(15).round(2))
-            st.dataframe(tabla_flu, width="stretch")
+    # --- Dónde empiezan las carreras. Nunca direcciones: son datos de los clientes ---
+    if detalle is not None and len(detalle) and "zona_recogida" in detalle.columns \
+            and paradas_dist:
+        refs = [(q["nombre"], _sin_acentos(q["nombre"] + " " + q["direccion"]))
+                for q in paradas_dist]
+        encabezado("route", "Dónde empiezan tus carreras")
+        st.markdown('<div class="tt-sub">En qué parada empezó cada carrera, o si fue en la '
+                    'calle o por aviso de la emisora.</div>', unsafe_allow_html=True)
+        st.dataframe(origen_de_carreras(detalle, refs), width="stretch")
 
 
 # =============================== Página ===============================
@@ -1314,6 +1387,9 @@ def main():
                 '<div><div class="nm">Taxi<b>Terrassa</b></div>'
                 '<div class="sb">Dónde hay trabajo, ahora mismo</div></div></div>',
                 unsafe_allow_html=True)
+    if modo_demo():
+        st.markdown('<div class="tt-demo">Modo demostración · carreras ficticias, '
+                    'no se guarda nada</div>', unsafe_allow_html=True)
 
     vista = st.session_state.get("tt_vista") or "Conductor"
     if vista == "Conductor":

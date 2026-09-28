@@ -167,6 +167,22 @@ check("sin clave -> teselas de OpenStreetMap", url.startswith("https://tile.open
       True)
 check("sin clave el fondo se pasa a gris", "grayscale(1)" in filtro, True)
 
+print("\n7b) Modo demo: carreras ficticias y ninguna dirección en Análisis")
+
+paradas_csv = app.cargar_paradas()
+demo_a = app.registro_demo(paradas_csv)
+demo_b = app.registro_demo(paradas_csv)
+check("el registro de demo es siempre el mismo", demo_a.equals(demo_b), True)
+check("tiene las columnas de Google Sheets", set(app.COLUMNAS) <= set(demo_a.columns), True)
+check("todas las carreras tienen fecha e importe",
+      bool(demo_a["fecha"].notna().all() and demo_a["importe_eur"].notna().all()), True)
+check("ninguna calle inventada se confunde con una parada",
+      [c for c in app.CALLES_DEMO if app.emparejar_parada(c, refs)], [])
+origenes = app.origen_de_carreras(app.preparar_registro(demo_a), refs)
+check("el resumen de origen solo nombra paradas o la calle",
+      set(origenes.index) <= {n for n, _ in refs} | {"En la calle o por aviso"}, True)
+check("el resumen no pierde carreras", int(origenes["Carreras"].sum()), len(demo_a))
+
 print("\n7) Festivos: solo cambian el patrón en el modo «Ahora mismo»")
 
 import datetime as dt  # noqa: E402
